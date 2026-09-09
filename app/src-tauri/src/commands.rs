@@ -20,13 +20,13 @@ fn facts_dir(data_dir: &std::path::Path, id: &str) -> PathBuf {
     data_dir.join("workspaces").join(id)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn list_workspaces(state: State<AppState>) -> std::result::Result<Vec<WorkspaceSummary>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db::list_workspaces(&db).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn get_workspace(
     state: State<AppState>,
     id: String,
@@ -35,7 +35,7 @@ pub fn get_workspace(
     db::get_workspace(&db, &id).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn create_workspace(
     state: State<AppState>,
     root_path: String,
@@ -54,7 +54,7 @@ pub fn create_workspace(
     db::create_workspace(&db, &name, &root_path).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn scan_workspace(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -93,13 +93,13 @@ pub async fn scan_workspace(
     Ok(facts)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn get_facts(state: State<AppState>, id: String) -> std::result::Result<Option<Facts>, String> {
     let dir = facts_dir(&state.data_dir, &id);
     scanner::read_facts(&dir).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn confirm_map(
     state: State<AppState>,
     id: String,
@@ -110,7 +110,7 @@ pub fn confirm_map(
     db::confirm_map(&db, &id, &proposal, name.as_deref()).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn update_prefs(
     state: State<AppState>,
     id: String,
@@ -120,19 +120,19 @@ pub fn update_prefs(
     db::merge_workspace_prefs(&db, &id, &patch).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn get_app_prefs(state: State<AppState>) -> std::result::Result<Value, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db::get_app_prefs(&db).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn set_app_prefs(state: State<AppState>, prefs: Value) -> std::result::Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db::set_app_prefs(&db, &prefs).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn set_criterion_met(
     state: State<AppState>,
     wire_id: String,
@@ -144,7 +144,7 @@ pub fn set_criterion_met(
     db::set_criterion_met(&db, &wire_id, index, met, evidence).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_files(
     state: State<'_, AppState>,
     id: String,
@@ -159,7 +159,7 @@ pub async fn list_files(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn git_changes(
     state: State<'_, AppState>,
     id: String,
@@ -174,7 +174,7 @@ pub async fn git_changes(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn rename_workspace(
     state: State<AppState>,
     id: String,
