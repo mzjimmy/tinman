@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>机器人 v2 · 同一份数据</title>
+<style>
+:root{
+  --canvas:#FFFFFF; --surface:#F9F8F7; --surface2:#F0EFED; --border:#E6E5E3;
+  --text:#2C2C2B; --text2:#7D7A75;
+  --blue:#2783DE; --blue-soft:#E5F2FC; --green:#46A171; --red:#E56458; --orange:#D5803B; --gray:#8F8A84;
+  --radius:8px;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --canvas:#191919; --surface:#202020; --surface2:#383836; --border:rgba(255,255,255,.20);
+    --text:#FFFFFF; --text2:rgba(255,255,255,.65);
+    --blue:#5E9FE8; --blue-soft:#1E3448; --green:#72BC8F; --red:#E97366; --orange:#DE9255; --gray:#8A8A87; }
+}
+*{box-sizing:border-box}
+body{margin:0 auto;padding:40px 32px 64px;max-width:1180px;background:var(--canvas);color:var(--text);
+  font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;}
+h1{font-size:28px;line-height:1.25;margin:0 0 8px;letter-spacing:-.01em}
+.sub{margin:0 0 24px;color:var(--text2);font-size:15px;max-width:780px}
+.sub b{color:var(--text)}
+
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--surface);
+  border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:12px}
+.bar .hint{font-size:14px;color:var(--text2);flex:1 1 240px;min-width:200px}
+.bar .hint b{color:var(--text)}
+button{min-height:44px;padding:10px 16px;border-radius:var(--radius);border:1px solid var(--border);
+  background:var(--canvas);color:var(--text);font-size:14px;font-family:inherit;cursor:pointer;transition:background .15s,border-color .15s}
+button:hover{border-color:var(--gray)}
+button.primary{background:var(--blue);border-color:transparent;color:#fff}
+button.primary:hover{filter:brightness(1.06)}
+button.on{background:var(--surface2);border-color:var(--gray)}
+#timer{font-size:20px;font-weight:600;min-width:36px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text2)}
+#timer.run{color:var(--red)}
+
+.answer{display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:12px 16px;margin-bottom:24px;font-size:14px;line-height:1.6;color:var(--text2)}
+body.show-answer .answer{display:block}
+.answer b{color:var(--red)}
+.answer .k{color:var(--text);font-weight:600}
+
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin:0 0 20px;font-size:13px;color:var(--text2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:14px;height:14px;border-radius:4px;display:inline-block;border:2px solid}
+.lg-b{background:var(--blue);border-color:var(--blue)}
+.lg-g{background:var(--green);border-color:var(--green)}
+.lg-p{background:transparent;border-color:var(--gray)}
+.lg-r{background:var(--red);border-color:var(--red)}
+.lg-e{background:linear-gradient(to top,var(--blue) 45%,var(--surface2) 45%);border-color:var(--blue)}
+
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 12px 12px}
+.proj-name{font-size:14px;font-weight:600;margin:0 4px 4px;line-height:1.4}
+.proj-meta{font-size:13px;color:var(--text2);margin:0 4px 8px}
+.overall{text-align:center;font-size:15px;font-weight:600;color:var(--text2);margin-top:6px}
+body.hide-labels .proj-name,body.hide-labels .proj-meta,body.hide-labels .overall{visibility:hidden}
+svg.form{width:100%;height:auto;display:block}
+
+.unit .bg{fill:var(--surface2)}
+.unit .fill{fill:var(--c)}
+.unit .edge{fill:none;stroke:var(--ln);stroke-width:2}
+.unit .ghost{fill:none;stroke:var(--border);stroke-width:1.5;stroke-dasharray:3 3}
+.unit[data-status="pending"]{--c:var(--gray);--ln:var(--gray)}
+.unit[data-status="in_progress"]{--c:var(--blue);--ln:var(--blue)}
+.unit[data-status="done"]{--c:var(--green);--ln:var(--green)}
+.unit[data-status="blocked"]{--c:var(--red);--ln:var(--red)}
+.unit[data-status="blocked"] .edge{stroke-width:3}
+.unit{cursor:default}
+.unit:hover .edge,.unit:focus .edge{stroke-width:3.5}
+.unit:focus{outline:none}
+
+.decor{fill:none;stroke:var(--gray);stroke-width:1.6;opacity:.6;stroke-linecap:round}
+.decor-fill{fill:var(--surface2);stroke:var(--gray);stroke-width:1.4;opacity:.85}
+.eye{fill:var(--surface2);stroke:var(--gray);stroke-width:.9}
+.bulb{fill:var(--surface2);stroke:var(--gray);stroke-width:1.4}
+.bulb.on{fill:var(--green);stroke:var(--green)}
+.ground{stroke:var(--border);stroke-width:2.5;stroke-linecap:round}
+.ground.off{stroke-dasharray:6 7}
+.ans-ring{display:none;fill:none;stroke:var(--red);stroke-width:2.5;stroke-dasharray:5 4}
+body.show-answer .ans-ring{display:block}
+
+#tip{position:fixed;pointer-events:none;z-index:20;background:var(--text);color:var(--canvas);
+  font-size:13px;line-height:1.45;padding:7px 10px;border-radius:6px;opacity:0;transition:opacity .12s;max-width:220px}
+#tip.show{opacity:1}
+body.hide-labels #tip{display:none}
+
+.notes{margin-top:40px;border-top:1px solid var(--border);padding-top:24px}
+.notes h2{font-size:19px;margin:0 0 4px}
+.notes .lead{color:var(--text2);font-size:14px;margin:0 0 16px}
+.notes ol{margin:0;padding-left:20px}
+.notes li{margin-bottom:14px}
+.notes li b{display:block;margin-bottom:2px}
+.notes li span{color:var(--text2);font-size:14px}
+.warn{margin-top:20px;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--orange);
+  border-radius:8px;padding:12px 16px;font-size:14px;line-height:1.6}
+.warn b{color:var(--orange)}
+
+details{margin-top:32px;border-top:1px solid var(--border);padding-top:20px}
+summary{cursor:pointer;font-size:15px;font-weight:600;padding:6px 0}
+table{border-collapse:collapse;width:100%;margin-top:12px;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+th{color:var(--text2);font-weight:500;font-size:13px}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.top td{color:var(--red);font-weight:600}
+.formula{margin-top:16px;font-size:14px;color:var(--text2)}
+code{font-family:Menlo,Consolas,monospace;font-size:13px;background:var(--surface2);padding:2px 5px;border-radius:4px}
+
+@media (max-width:1000px){ .grid{grid-template-columns:repeat(2,1fr)} }
+@media (max-width:560px){
+  body{padding:24px 16px 48px}
+  h1{font-size:24px}
+  .grid{grid-template-columns:1fr}
+  svg.form{max-width:260px;margin:0 auto}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<h1>机器人 v2</h1>
+<p class="sub">和上一版同一份数据、同一个隐喻。改的只有几何。<b>点「切到旧几何」可以随时对照</b>——同一个项目、同一组数字，看看形状说的话是不是变了。</p>
+
+<div class="bar">
+  <div class="hint" id="hint"><b>10 秒测试</b>：隐藏文字，只看形状，说出「哪个项目的哪一块最短」。</div>
+  <div id="timer">10</div>
+  <button id="btn-start" class="primary">开始 10 秒测试</button>
+  <button id="btn-mode">切到旧几何</button>
+  <button id="btn-hide">隐藏标签</button>
+  <button id="btn-ans">显示答案</button>
+  <button id="btn-reset">还原</button>
+</div>
+
+<div class="answer">
+  正解：<b id="ans-text"></b>。第二名：<span class="k" id="ans-2"></span>。<br>
+  四个项目的总进度是 <span class="k">47% / 100% / 42% / 50%</span>——数字几乎分不出高低，判断只能来自形状。
+</div>
+
+<div class="legend">
+  <span><i class="lg-b"></i>进行中</span>
+  <span><i class="lg-g"></i>已完成</span>
+  <span><i class="lg-p"></i>未开工</span>
+  <span><i class="lg-r"></i>受阻（红色斜纹）</span>
+  <span><i class="lg-e"></i>空白 = 还欠的量</span>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<section class="notes">
+  <h2>改了四处</h2>
+  <p class="lead">每一条都对应上一版里一个能被看见的失效。</p>
+  <ol>
+    <li><b>权重进几何：部位宽度 ∝ 权重</b>
+      <span>空白面积 = 权重 × 未完成比例，正好等于短腿分数。以前 weight 3 的基础设施和 weight 1 的文档站画得一样宽，眼睛看到的和算出来的是两回事。</span></li>
+    <li><b>缺件真缺：没有的模块不画</b>
+      <span>客户端 SDK 只有 3 个模块，现在就是一个没有腿的上半身，悬空本身就是「没有基础设施、没有部署」的信息。旧几何里它是一具七格空五格的残躯，看着像 25%，实际 50%。</span></li>
+    <li><b>左右不再对称：形状即身份</b>
+      <span>左腿有底座（基础设施）、右腿有轮子（发布）、左臂有手（前端）、右臂有插头（对外接口）。不看标签也能认出被点亮或被掏空的是哪一块，不用再靠「左边那个」记位置。</span></li>
+    <li><b>受阻是实体标记，不是气氛</b>
+      <span>红色加粗描边 + 45° 斜纹填充。不靠动画、不靠颜色单独承担，打印成灰度也还在。</span></li>
+  </ol>
+  <div class="warn"><b>机器人仍然有一处改不掉的短板：跨项目排序。</b><br>
+  现在你能一眼看出「每个项目内部哪块最短」，但「A 的腿和 B 的臂谁更该先动」还是要靠估面积。建议在舰队视图里给每个机器人配一条 8px 高的横向堆栈条：机器人负责身份识别和内部定位，条负责跨项目排序。两者共用同一份数据，不冲突。</div>
+</section>
+
+<details>
+  <summary>真实数据与短腿分数（验证用）</summary>
+  <table id="tbl"><thead><tr><th>项目</th><th>模块</th><th>部位</th><th class="num">权重</th><th class="num">进度</th><th>状态</th><th class="num">短腿分数</th></tr></thead><tbody></tbody></table>
+  <p class="formula">短腿分数 <code>S = 权重 × (1 − 进度) × 阻塞系数</code>，受阻取 1.5。在新几何里，<code>S</code> 约等于该部位的空白面积——这就是「看得见」的含义。</p>
+</details>
+
+<div id="tip"></div>
+
+<script>
+var PROJECTS = [
+  {name:'示例项目', mods:[
+    {label:'基础设施',   slot:'left_leg',  weight:3, progress:20,  status:'blocked'},
+    {label:'部署流水线', slot:'right_leg', weight:2, progress:0,   status:'pending'},
+    {label:'核心服务',   slot:'torso',     weight:3, progress:70,  status:'in_progress'},
+    {label:'移动客户端', slot:'right_arm', weight:1, progress:45,  status:'in_progress'},
+    {label:'Web 前端',   slot:'left_arm',  weight:2, progress:45,  status:'in_progress'},
+    {label:'算法引擎',   slot:'head',      weight:2, progress:100, status:'done'}
+  ]},
+  {name:'数据平台重构', mods:[
+    {label:'存储层',     slot:'left_leg',  weight:3, progress:100, status:'done'},
+    {label:'运维体系',   slot:'right_leg', weight:2, progress:100, status:'done'},
+    {label:'数据管道',   slot:'torso',     weight:3, progress:100, status:'done'},
+    {label:'查询网关',   slot:'right_arm', weight:2, progress:100, status:'done'},
+    {label:'分析 SDK',   slot:'left_arm',  weight:1, progress:100, status:'done'},
+    {label:'元数据服务', slot:'head',      weight:2, progress:100, status:'done'}
+  ]},
+  {name:'边缘计算网关', mods:[
+    {label:'硬件适配',   slot:'left_leg',  weight:2, progress:35,  status:'in_progress'},
+    {label:'安全沙箱',   slot:'right_arm', weight:2, progress:0,   status:'blocked'},
+    {label:'运行时',     slot:'torso',     weight:3, progress:30,  status:'in_progress'},
+    {label:'OTA 升级',   slot:'left_arm',  weight:1, progress:60,  status:'in_progress'},
+    {label:'协议解析',   slot:'head',      weight:2, progress:100, status:'done'}
+  ]},
+  {name:'客户端 SDK', mods:[
+    {label:'核心包',     slot:'torso',     weight:3, progress:80,  status:'in_progress'},
+    {label:'语言绑定',   slot:'left_arm',  weight:1, progress:10,  status:'pending'},
+    {label:'文档站',     slot:'right_arm', weight:1, progress:0,   status:'pending'}
+  ]}
+];
+
+var SLOT_NAME = {head:'头 · 决策 / 算法', torso:'躯干 · 核心域', left_arm:'左臂 · 前端 UI',
+  right_arm:'右臂 · 对外接口', left_leg:'左腿 · 基础设施', right_leg:'右腿 · 部署发布'};
+var ST_NAME = {pending:'未开工', in_progress:'进行中', done:'已完成', blocked:'受阻'};
+var ALL_SLOTS = ['head','torso','left_arm','right_arm','left_leg','right_leg'];
+
+function shortLeg(m){ return m.weight * (1 - m.progress/100) * (m.status==='blocked' ? 1.5 : 1); }
+function overall(p){
+  var sw=0, sp=0;
+  p.mods.forEach(function(m){ sw += m.weight; sp += m.weight*m.progress; });
+  return sw ? Math.round(sp/sw) : 0;
+}
+
+var RANK = [];
+PROJECTS.forEach(function(p){ p.mods.forEach(function(m){
+  RANK.push({proj:p.name, mod:m, s:shortLeg(m)});
+}); });
+RANK.sort(function(a,b){ return b.s - a.s; });
+var WINNER = RANK[0];
+
+document.getElementById('ans-text').textContent =
+  WINNER.proj + ' · ' + WINNER.mod.label + '（' + WINNER.mod.progress + '%，受阻，权重 ' + WINNER.mod.weight + '）→ 短腿分数 ' + WINNER.s.toFixed(1);
+document.getElementById('ans-2').textContent =
+  RANK[1].proj + ' · ' + RANK[1].mod.label + ' → ' + RANK[1].s.toFixed(1);
+
+/* ---------- 几何 ---------- */
+var GROUND = 244;
+
+// 旧几何：六个固定槽位，等宽，左右对称，缺的画虚线空槽
+var V1 = {
+  head:      {x:75,  y:20,  w:50, h:46, rx:12},
+  torso:     {x:64,  y:72,  w:72, h:76, rx:12},
+  left_arm:  {x:26,  y:76,  w:26, h:64, rx:12},
+  right_arm: {x:148, y:76,  w:26, h:64, rx:12},
+  left_leg:  {x:68,  y:156, w:26, h:86, rx:12},
+  right_leg: {x:106, y:156, w:26, h:86, rx:12}
+};
+
+// 新几何：宽度由权重决定，缺的不画
+function layoutV2(by){
+  var out = {};
+  var tW = by.torso ? 40 + by.torso.weight*12 : 64;
+  var tX = 100 - tW/2;
+  if (by.torso) out.torso = {x:tX, y:74, w:tW, h:80, rx:10};
+  if (by.head){ var hw = 40 + by.head.weight*6; out.head = {x:100-hw/2, y:18, w:hw, h:50, rx:12}; }
+  if (by.left_arm){ var lw = 10 + by.left_arm.weight*7; out.left_arm = {x:tX-7-lw, y:80, w:lw, h:62, rx:9}; }
+  if (by.right_arm){ var rw = 10 + by.right_arm.weight*7; out.right_arm = {x:tX+tW+7, y:80, w:rw, h:62, rx:9}; }
+  var llw = by.left_leg  ? 12 + by.left_leg.weight*9  : 0;
+  var rlw = by.right_leg ? 12 + by.right_leg.weight*9 : 0;
+  var total = llw + rlw + ((llw && rlw) ? 5 : 0);
+  var sx = 100 - total/2;
+  if (by.left_leg){ out.left_leg = {x:sx, y:158, w:llw, h:74, rx:10}; sx += llw + 5; }
+  if (by.right_leg){ out.right_leg = {x:sx, y:158, w:rlw, h:74, rx:10}; }
+  return out;
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+function unitSvg(uid, slot, r, m){
+  var cid = uid + '-c-' + slot;
+  var s = '';
+  if (!m){
+    s += '<g class="unit" data-status="empty">';
+    s += '<rect class="ghost" x="'+r.x+'" y="'+r.y+'" width="'+r.w+'" height="'+r.h+'" rx="'+r.rx+'"/>';
+    s += '</g>';
+    return s;
+  }
+  var fh = r.h * m.progress / 100;
+  var fy = r.y + r.h - fh;
+  s += '<g class="unit" tabindex="0" data-status="'+m.status+'"'
+     + ' data-tip="'+esc(m.label)+' ｜ '+esc(SLOT_NAME[slot])+'&#10;进度 '+m.progress+'%　权重 '+m.weight+'　'+ST_NAME[m.status]+'&#10;短腿分数 '+shortLeg(m).toFixed(1)+'">';
+  s += '<clipPath id="'+cid+'"><rect x="'+r.x+'" y="'+r.y+'" width="'+r.w+'" height="'+r.h+'" rx="'+r.rx+'"/></clipPath>';
+  s += '<rect class="bg" x="'+r.x+'" y="'+r.y+'" width="'+r.w+'" height="'+r.h+'" rx="'+r.rx+'"/>';
+  if (fh > 0) s += '<rect class="fill" clip-path="url(#'+cid+')" x="'+r.x+'" y="'+fy+'" width="'+r.w+'" height="'+fh+'"/>';
+  if (m.status === 'blocked') s += '<rect clip-path="url(#'+cid+')" x="'+r.x+'" y="'+r.y+'" width="'+r.w+'" height="'+r.h+'" fill="url(#'+uid+'-h)"/>';
+  s += '<rect class="edge" x="'+r.x+'" y="'+r.y+'" width="'+r.w+'" height="'+r.h+'" rx="'+r.rx+'"/>';
+  s += '</g>';
+  return s;
+}
+
+function decorSvg(mode, by, geo){
+  if (mode === 'v1'){
+    var d = '';
+    var h = V1.head;
+    d += '<line class="decor" x1="100" y1="'+h.y+'" x2="100" y2="'+(h.y-11)+'"/>';
+    d += '<circle class="bulb'+(by.head && by.head.status==='done' ? ' on' : '')+'" cx="100" cy="'+(h.y-14)+'" r="3.2"/>';
+    return d;
+  }
+  var s = '';
+  // 头：天线 + 眼睛（天线灯亮 = 该部位已完成）
+  if (geo.head){
+    var g = geo.head;
+    s += '<line class="decor" x1="100" y1="'+g.y+'" x2="100" y2="'+(g.y-11)+'"/>';
+    s += '<circle class="bulb'+(by.head.status==='done' ? ' on' : '')+'" cx="100" cy="'+(g.y-14)+'" r="3.2"/>';
+  }
+  // 颈
+  if (geo.head && geo.torso) s += '<rect class="decor-fill" x="93" y="'+(geo.head.y+geo.head.h-1)+'" width="14" height="'+(geo.torso.y-geo.head.y-geo.head.h+2)+'" rx="3"/>';
+  // 左臂末端：手（三指）
+  if (geo.left_arm){
+    var a = geo.left_arm, yb = a.y + a.h;
+    for (var i=0;i<3;i++){
+      var fx = a.x + a.w*(i+1)/4;
+      s += '<line class="decor" x1="'+fx+'" y1="'+(yb+1)+'" x2="'+fx+'" y2="'+(yb+9)+'"/>';
+    }
+  }
+  // 右臂末端：接口插头（两个针脚）
+  if (geo.right_arm){
+    var b = geo.right_arm, yb2 = b.y + b.h;
+    s += '<rect class="decor-fill" x="'+(b.x+b.w/2-8)+'" y="'+(yb2+1)+'" width="16" height="6" rx="2"/>';
+    s += '<line class="decor" x1="'+(b.x+b.w/2-4)+'" y1="'+(yb2+7)+'" x2="'+(b.x+b.w/2-4)+'" y2="'+(yb2+13)+'"/>';
+    s += '<line class="decor" x1="'+(b.x+b.w/2+4)+'" y1="'+(yb2+7)+'" x2="'+(b.x+b.w/2+4)+'" y2="'+(yb2+13)+'"/>';
+  }
+  // 左腿末端：地基底座
+  if (geo.left_leg){
+    var l = geo.left_leg;
+    s += '<rect class="decor-fill" x="'+(l.x-5)+'" y="'+(l.y+l.h-1)+'" width="'+(l.w+10)+'" height="7" rx="2"/>';
+  }
+  // 右腿末端：轮子
+  if (geo.right_leg){
+    var rl = geo.right_leg, cy = rl.y + rl.h + 4;
+    s += '<circle class="decor-fill" cx="'+(rl.x+rl.w*0.28)+'" cy="'+cy+'" r="5"/>';
+    s += '<circle class="decor-fill" cx="'+(rl.x+rl.w*0.72)+'" cy="'+cy+'" r="5"/>';
+  }
+  return s;
+}
+
+// 眼睛必须画在头部填充之上，否则会被盖住
+function eyesSvg(mode, by, geo){
+  var g = (mode === 'v1') ? V1.head : geo.head;
+  if (!g || !by.head) return '';
+  var dx = (mode === 'v1') ? 11 : g.w/4.6;
+  return '<circle class="eye" cx="'+(100-dx)+'" cy="'+(g.y+21)+'" r="4.5"/>'
+       + '<circle class="eye" cx="'+(100+dx)+'" cy="'+(g.y+21)+'" r="4.5"/>';
+}
+
+function cardSvg(p, idx, mode){
+  var uid = 'p' + idx + mode;
+  var by = {};
+  p.mods.forEach(function(m){ by[m.slot] = m; });
+  var geo = (mode === 'v1') ? V1 : layoutV2(by);
+
+  var s = '<svg class="form" viewBox="0 0 200 260" role="img" aria-label="'+esc(p.name)+' 进度机器人">';
+  s += '<defs><pattern id="'+uid+'-h" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">'
+     + '<line x1="0" y1="0" x2="0" y2="7" stroke="var(--red)" stroke-width="2.6"/></pattern></defs>';
+  var grounded = (mode === 'v1') || !!(by.left_leg || by.right_leg);
+  s += '<line class="ground'+(grounded ? '' : ' off')+'" x1="30" y1="'+GROUND+'" x2="170" y2="'+GROUND+'"/>';
+  s += decorSvg(mode, by, geo);
+
+  ALL_SLOTS.forEach(function(slot){
+    var r = geo[slot];
+    if (!r) return;
+    s += unitSvg(uid, slot, r, by[slot] || null);
+  });
+
+  s += eyesSvg(mode, by, geo);
+
+  // 答案环
+  if (p.name === WINNER.proj){
+    var wr = geo[WINNER.mod.slot];
+    if (wr) s += '<ellipse class="ans-ring" cx="'+(wr.x+wr.w/2)+'" cy="'+(wr.y+wr.h/2)+'" rx="'+(wr.w/2+9)+'" ry="'+(wr.h/2+9)+'"/>';
+  }
+  s += '</svg>';
+  return s;
+}
+
+var mode = 'v2';
+
+function render(){
+  var g = document.getElementById('grid');
+  var html = '';
+  PROJECTS.forEach(function(p, i){
+    html += '<div class="card">'
+      + '<div class="proj-name">' + esc(p.name) + '</div>'
+      + '<div class="proj-meta">' + p.mods.length + ' 个模块</div>'
+      + cardSvg(p, i, mode)
+      + '<div class="overall">' + overall(p) + '%</div>'
+      + '</div>';
+  });
+  g.innerHTML = html;
+  bindTips();
+}
+
+/* ---------- tooltip ---------- */
+var tip = document.getElementById('tip');
+function showTip(el, x, y){
+  var t = el.getAttribute('data-tip');
+  if (!t || document.body.classList.contains('hide-labels')) return;
+  tip.innerHTML = esc(t).replace(/&#10;|\n/g, '<br>');
+  tip.classList.add('show');
+  var w = tip.offsetWidth, h = tip.offsetHeight;
+  var left = Math.min(Math.max(8, x + 14), window.innerWidth - w - 8);
+  var top = y - h - 12; if (top < 8) top = y + 20;
+  tip.style.left = left + 'px'; tip.style.top = top + 'px';
+}
+function hideTip(){ tip.classList.remove('show'); }
+function bindTips(){
+  var units = document.querySelectorAll('.unit[data-tip]');
+  Array.prototype.forEach.call(units, function(u){
+    u.addEventListener('mousemove', function(e){ showTip(u, e.clientX, e.clientY); });
+    u.addEventListener('mouseleave', hideTip);
+    u.addEventListener('focus', function(){
+      var b = u.getBoundingClientRect();
+      showTip(u, b.left + b.width/2, b.top);
+    });
+    u.addEventListener('blur', hideTip);
+  });
+}
+
+/* ---------- 控制 ---------- */
+var body = document.body;
+var timerEl = document.getElementById('timer');
+var hintEl = document.getElementById('hint');
+var btnHide = document.getElementById('btn-hide');
+var btnAns = document.getElementById('btn-ans');
+var btnMode = document.getElementById('btn-mode');
+var tick = null;
+
+function setHide(v){
+  body.classList.toggle('hide-labels', v);
+  btnHide.textContent = v ? '显示标签' : '隐藏标签';
+  btnHide.classList.toggle('on', v);
+  if (v) hideTip();
+}
+function setAns(v){
+  body.classList.toggle('show-answer', v);
+  btnAns.textContent = v ? '隐藏答案' : '显示答案';
+  btnAns.classList.toggle('on', v);
+}
+function stopTimer(){ if (tick){ clearInterval(tick); tick = null; } timerEl.classList.remove('run'); }
+
+document.getElementById('btn-start').addEventListener('click', function(){
+  stopTimer(); setAns(false); setHide(true);
+  var n = 10;
+  timerEl.textContent = n; timerEl.classList.add('run');
+  hintEl.innerHTML = '<b>只看形状</b>：哪个项目的哪一块最短？时间到自动亮答案。';
+  tick = setInterval(function(){
+    n--; timerEl.textContent = n;
+    if (n <= 0){ stopTimer(); setHide(false); setAns(true);
+      hintEl.innerHTML = '<b>时间到</b>：红色虚线圈住的就是全局最短腿。'; }
+  }, 1000);
+});
+btnHide.addEventListener('click', function(){ stopTimer(); setHide(!body.classList.contains('hide-labels')); });
+btnAns.addEventListener('click', function(){ stopTimer(); setAns(!body.classList.contains('show-answer')); });
+btnMode.addEventListener('click', function(){
+  mode = (mode === 'v2') ? 'v1' : 'v2';
+  btnMode.textContent = (mode === 'v2') ? '切到旧几何' : '切回新几何';
+  btnMode.classList.toggle('on', mode === 'v1');
+  hintEl.innerHTML = (mode === 'v1')
+    ? '<b>旧几何</b>：六个固定槽位，等宽，左右对称，缺的模块留虚线空槽。'
+    : '<b>新几何</b>：宽度 ∝ 权重，缺的模块不画，左右形状不同。';
+  render();
+});
+document.getElementById('btn-reset').addEventListener('click', function(){
+  stopTimer(); setHide(false); setAns(false);
+  timerEl.textContent = '10';
+  hintEl.innerHTML = '<b>10 秒测试</b>：隐藏文字，只看形状，说出「哪个项目的哪一块最短」。';
+});
+
+/* ---------- 数据表 ---------- */
+(function(){
+  var tb = document.querySelector('#tbl tbody');
+  var html = '';
+  RANK.forEach(function(r, i){
+    html += '<tr' + (i === 0 ? ' class="top"' : '') + '>'
+      + '<td>' + esc(r.proj) + '</td>'
+      + '<td>' + esc(r.mod.label) + '</td>'
+      + '<td>' + esc(SLOT_NAME[r.mod.slot]) + '</td>'
+      + '<td class="num">' + r.mod.weight + '</td>'
+      + '<td class="num">' + r.mod.progress + '%</td>'
+      + '<td>' + ST_NAME[r.mod.status] + '</td>'
+      + '<td class="num">' + r.s.toFixed(1) + '</td></tr>';
+  });
+  tb.innerHTML = html;
+})();
+
+render();
+</script>
+</body>
+</html>
