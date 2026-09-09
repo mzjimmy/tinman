@@ -22,6 +22,5 @@ npm run build
 
 ## Sources
 
-- Product intent (Chinese): `软件意图提示词：机器人视图多项目推进工作台（代号 Tinman）.md`
 - Visual reference: `robot-v2.html`
 - Assumptions recorded during the demo build: `demo/ASSUMPTIONS.md`

@@ -51,4 +51,4 @@ Other flows:
 
 ## Originals (read-only)
 
-Do not modify repo-root `robot-v2.html` or the MD intent file; visuals follow HTML, function follows MD.
+Do not modify repo-root `robot-v2.html`. Visuals follow that HTML; product intent is kept locally and is not published in this repository.

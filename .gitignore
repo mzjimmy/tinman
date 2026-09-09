@@ -5,3 +5,6 @@ demo/dist
 *.log
 .DS_Store
 Thumbs.db
+
+# Local product intent — do not publish
+软件意图提示词：机器人视图多项目推进工作台（代号 Tinman）.md
