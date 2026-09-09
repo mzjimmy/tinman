@@ -1,6 +1,10 @@
 node_modules
 demo/node_modules
 demo/dist
+app/node_modules
+app/dist
+app/src-tauri/target
+app/src-tauri/gen
 .oa/
 *.log
 .DS_Store
