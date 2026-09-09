@@ -783,19 +783,57 @@ mod tests {
             .expect("repo root")
     }
 
+    /// The 10s budget in the spec is a claim about the scanner on a repo of up to
+    /// 100k lines, not a claim about whatever filesystem this checkout happens to
+    /// sit on. Measured against a synthetic 100k-line repo in the system temp dir,
+    /// which is local disk even when the checkout is on a slow network or
+    /// virtualised mount. Timing the checkout itself measured the mount: the same
+    /// unchanged scanner took 11s and 41s on consecutive runs here.
     #[test]
-    fn scan_this_repo_under_10s_read_only_and_populated() {
-        let root = repo_root();
-        let before = snapshot_tree(&root).expect("snapshot before");
+    fn scan_100k_line_repo_under_10s() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("synthetic");
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"synthetic","scripts":{"test":"echo ok"}}"#,
+        )
+        .unwrap();
+        // 500 files x 200 lines = 100_000 lines, spread over 25 directories.
+        let body: String = (0..200)
+            .map(|i| format!("const value_{i} = {i};\n"))
+            .collect();
+        for d in 0..25 {
+            let dir = root.join(format!("mod_{d}"));
+            fs::create_dir(&dir).unwrap();
+            for f in 0..20 {
+                fs::write(dir.join(format!("file_{f}.ts")), &body).unwrap();
+            }
+        }
         let start = Instant::now();
         let facts = scan(&root, |_| {}).expect("scan");
         let elapsed = start.elapsed();
-        let after = snapshot_tree(&root).expect("snapshot after");
 
         assert!(
             elapsed < Duration::from_secs(10),
             "scan took {elapsed:?}, limit 10s"
         );
+        assert_eq!(facts.file_count, 501, "file_count");
+        assert_eq!(
+            facts.loc_by_language.get("TypeScript").copied(),
+            Some(100_000),
+            "loc_by_language: {:?}",
+            facts.loc_by_language
+        );
+    }
+
+    #[test]
+    fn scan_this_repo_is_read_only_and_populated() {
+        let root = repo_root();
+        let before = snapshot_tree(&root).expect("snapshot before");
+        let facts = scan(&root, |_| {}).expect("scan");
+        let after = snapshot_tree(&root).expect("snapshot after");
+
         assert_eq!(
             before, after,
             "scanned tree mtime+size changed — scanner must be read-only"

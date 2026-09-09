@@ -70,7 +70,19 @@ export function RobotView({ store }: { store: AppStore }) {
         />
       </div>
       <div className="robot-side">
-        <PartPanel store={store} part={selectedPart} />
+        <PartPanel
+          part={selectedPart}
+          advice={store.partAdvice}
+          callLog={store.llmCalls}
+          onToggleCriterion={(wireId, index, met) => void store.setCriterion(wireId, index, met)}
+          onAddCriterion={(wireId, text) => void store.addCriterion(wireId, text)}
+          onRequestAdvice={() => void store.requestAdvice()}
+          onGenerateGoal={(wireId) => void store.generateGoal(wireId)}
+          onConfirmDispatch={() => void store.confirmDispatch()}
+          onCancelGoal={store.clearGoalDraft}
+          goalDraft={store.goalDraft}
+          dispatchBusy={store.dispatchBusy}
+        />
       </div>
       {tip && (
         <div className="robot-tooltip" style={{ left: tip.x + 14, top: tip.y - 12 }}>

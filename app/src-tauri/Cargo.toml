@@ -25,6 +25,8 @@ uuid = { version = "1", features = ["v4"] }
 regex = "1"
 toml = "0.8"
 thiserror = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+keyring = "3"
 
 [dev-dependencies]
 tempfile = "3"

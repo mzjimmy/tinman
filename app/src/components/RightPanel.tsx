@@ -67,15 +67,51 @@ tests: ${facts.tests.files.length} files (not executed)
     )
   }
   if (store.rightPanel === 'terminal') {
-    return (
-      <pre className="panel-body muted">
-        round 2 占位 — 真正的 PTY 与 agent CLI 派发会接在这里。这一栏不会被藏起来。
-      </pre>
-    )
+    return <TerminalPane store={store} />
   }
   return (
     <pre className="panel-body muted">
-      round 2 占位 — 预览浏览器未接入。用 Changes / Files / Facts 接管手工操作。
+      预览浏览器未接入。用 Changes / Files / Facts 接管手工操作。
     </pre>
+  )
+}
+
+function takeoverCommand(worktree?: string, command?: string): string {
+  const lines: string[] = []
+  if (worktree) lines.push(`cd ${worktree}`)
+  if (command) lines.push(command)
+  if (lines.length === 0) {
+    return '派发后这里会出现 worktree 路径和完整命令，可复制后手工接管。'
+  }
+  return lines.join('\n')
+}
+
+export function TerminalPane({ store }: { store: AppStore }) {
+  const task = store.tasks.find((t) => t.id === store.selectedTaskId) ?? store.tasks[0]
+  const lines = task ? (store.taskLines[task.id] ?? []) : []
+  const worktree = task?.worktreePath ?? task?.goal.workspace.worktree_path
+  const command = task?.command
+  const takeover = takeoverCommand(worktree, command)
+
+  return (
+    <div className="terminal-pane" data-testid="terminal-pane">
+      <div className="terminal-meta">
+        <div>
+          <strong>worktree</strong>
+          <pre data-testid="terminal-worktree">{worktree ?? '（未选择任务）'}</pre>
+        </div>
+        <div>
+          <strong>command</strong>
+          <pre data-testid="terminal-command">{takeover}</pre>
+        </div>
+      </div>
+      <pre className="terminal-log" data-testid="terminal-log">
+        {task
+          ? lines.length > 0
+            ? lines.map((l) => `${l.stream}: ${l.text}`).join('\n')
+            : '等待输出…'
+          : '未选择任务。派发后输出会出现在这里。工位路径和命令不会被藏起来。'}
+      </pre>
+    </div>
   )
 }

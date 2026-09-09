@@ -84,6 +84,7 @@ export function projectFromWorkspace(ws: WorkspaceDto, facts?: Facts | null): Pr
     recentTasks,
     lastActivityAt: (ws.prefs?.lastActivityAt as string | undefined) ?? facts?.git.last_commit_at ?? undefined,
     mapDraft: (ws.prefs?.mapDraft as Project['mapDraft']) ?? undefined,
+    llmProfileId: ws.llm_profile_id,
   }
 }
 
@@ -96,6 +97,7 @@ export function projectFromSummary(s: WorkspaceSummary): Project {
     mapConfirmed: Boolean(s.prefs?.mapConfirmed),
     recentTasks: [],
     lastActivityAt: s.prefs?.lastActivityAt as string | undefined,
+    llmProfileId: s.llm_profile_id,
   }
 }
 

@@ -1,11 +1,17 @@
 mod commands;
 mod db;
+mod dispatch;
 mod error;
 mod files;
 mod gitutil;
+mod llm;
+mod queue;
+mod runner;
 mod scanner;
+mod verify;
+mod worktree;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager};
@@ -24,7 +30,9 @@ pub fn run() {
             app.manage(AppState {
                 db: Mutex::new(conn),
                 data_dir,
+                children: Arc::new(crate::runner::LiveChildren::default()),
             });
+            commands::recover_and_drain(app.handle());
 
             let add = MenuItemBuilder::with_id("add-folder", "Add Local Folder…")
                 .accelerator("CmdOrCtrl+O")
@@ -113,6 +121,20 @@ pub fn run() {
             commands::list_files,
             commands::git_changes,
             commands::rename_workspace,
+            commands::llm_call,
+            commands::list_llm_calls,
+            commands::add_criterion,
+            commands::set_llm_key,
+            commands::set_workspace_llm_profile,
+            commands::app_paths,
+            commands::list_tasks,
+            commands::get_task,
+            commands::read_task_log,
+            commands::remove_worktree,
+            commands::dispatch_task,
+            commands::pause_task,
+            commands::resume_task,
+            commands::abandon_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

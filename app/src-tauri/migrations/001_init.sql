@@ -49,3 +49,23 @@ CREATE TABLE IF NOT EXISTS task (
 CREATE INDEX IF NOT EXISTS idx_part_workspace ON part(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_wire_part ON wire(part_id);
 CREATE INDEX IF NOT EXISTS idx_task_workspace ON task(workspace_id);
+
+-- Fifth table: LLM call log. The four core tables are the domain; every model
+-- call's input, output and gate verdict must be reviewable, so they cannot live
+-- on workspace/part/wire/task. Existing databases pick this up on reopen
+-- because open() re-runs this file and the statement is IF NOT EXISTS.
+CREATE TABLE IF NOT EXISTS llm_call (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL,
+  provider_id TEXT,
+  model TEXT,
+  request_json TEXT NOT NULL,
+  response_text TEXT,
+  verdict TEXT NOT NULL,
+  reject_reason TEXT,
+  duration_ms INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_call_workspace ON llm_call(workspace_id, created_at);

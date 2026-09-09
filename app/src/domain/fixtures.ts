@@ -31,6 +31,7 @@ export function makePart(opts: {
   status?: PartStatus
   wires?: Wire[]
   plannedStart?: string
+  facts?: Part['facts']
 }): Part {
   return {
     id: opts.id ?? `part-${opts.slot}`,
@@ -40,6 +41,7 @@ export function makePart(opts: {
     status: opts.status ?? 'pending',
     wires: opts.wires ?? [],
     plannedStart: opts.plannedStart,
+    facts: opts.facts,
   }
 }
 

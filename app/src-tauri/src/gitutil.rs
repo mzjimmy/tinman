@@ -31,6 +31,19 @@ pub fn is_git_repo(root: &Path) -> bool {
         .unwrap_or(false)
 }
 
+pub fn branch_exists(root: &Path, branch: &str) -> bool {
+    git(
+        root,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .is_ok()
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct GitChanges {
     pub status: String,

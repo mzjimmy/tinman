@@ -42,6 +42,15 @@ export interface FrameworkAdvice {
   done_criteria: string[]
 }
 
+export type LlmPurpose = 'map_architecture' | 'advise_part' | 'draft_goal' | 'verify_delivery'
+
+export type LlmUnavailableReason = 'no_key' | 'no_profile' | 'offline' | 'rejected'
+
+export type LlmAdviceView =
+  | { status: 'available'; advice: FrameworkAdvice }
+  | { status: 'unavailable'; reason: LlmUnavailableReason; detail?: string }
+  | { status: 'idle' }
+
 export interface Part {
   id: string
   slot: Slot
@@ -63,6 +72,7 @@ export interface Project {
   recentTasks: { label: string; ago: string }[]
   lastActivityAt?: string
   mapDraft?: import('./proposal').ArchitectureProposal
+  llmProfileId?: string | null
 }
 
 export interface GoalCard {
@@ -91,6 +101,22 @@ export type TaskState =
   | 'checking'
   | 'done'
   | 'failed'
+  | 'paused'
+  | 'abandoned'
+
+export interface LlmProfile {
+  id: string
+  kind: 'openai_compatible' | 'ollama'
+  base_url: string
+  model: string
+  key_ref?: string | null
+}
+
+export interface TaskOutputLine {
+  task_id: string
+  stream: 'stdout' | 'stderr' | string
+  text: string
+}
 
 export interface Task {
   id: string
@@ -100,7 +126,11 @@ export interface Task {
   goal: GoalCard
   state: TaskState
   stationId?: string
+  worktreePath?: string
   dispatchedAt?: string
+  finishedAt?: string
+  result?: unknown
+  command?: string
 }
 
 export interface Station {
@@ -163,6 +193,8 @@ export interface AppState {
   llmProfile?: string
   dispatchTarget?: string
   attachments?: string[]
+  selectedTaskId?: string
+  taskLines?: Record<string, TaskOutputLine[]>
 }
 
 export const SLOT_LABELS: Record<Slot, string> = {

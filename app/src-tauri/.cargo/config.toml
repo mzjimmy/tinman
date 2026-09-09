@@ -1,0 +1,6 @@
+# The repo may live on a filesystem that does not support file locking (network or
+# virtualised mounts), where rustc's incremental session lock fails with
+# "Operation not supported (os error 45)". Incremental compilation buys little for
+# this crate and costs the whole build there.
+[build]
+incremental = false

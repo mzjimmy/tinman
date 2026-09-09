@@ -4,6 +4,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::error::{AppError, Result};
+use crate::llm::CallLogEntry;
 
 pub const APP_PREFS_ID: &str = "__tinman_app__";
 pub const ALL_SLOTS: &[&str] = &[
@@ -415,6 +416,279 @@ pub fn set_criterion_met(
     )
 }
 
+pub fn add_criterion(conn: &Connection, wire_id: &str, text: &str) -> Result<WireRecord> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(AppError::msg("criterion text is empty"));
+    }
+    let (part_id, label, criteria_raw, status): (String, String, String, String) = conn.query_row(
+        "SELECT part_id, label, criteria_json, status FROM wire WHERE id = ?1",
+        params![wire_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    let mut criteria: Vec<Criterion> = serde_json::from_str(&criteria_raw)?;
+    criteria.push(Criterion {
+        text: text.to_string(),
+        met: false,
+        evidence: String::new(),
+    });
+    upsert_wire(
+        conn,
+        &part_id,
+        WireInput {
+            id: Some(wire_id.into()),
+            label,
+            criteria,
+            blocked: status == "blocked",
+        },
+    )
+}
+
+pub fn set_workspace_llm_profile(
+    conn: &Connection,
+    id: &str,
+    profile_id: Option<&str>,
+) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE workspace SET llm_profile_id = ?1 WHERE id = ?2",
+        params![profile_id, id],
+    )?;
+    if n == 0 {
+        return Err(AppError::msg(format!("workspace not found: {id}")));
+    }
+    Ok(())
+}
+
+pub fn insert_llm_call(conn: &Connection, entry: &CallLogEntry) -> Result<()> {
+    conn.execute(
+        "INSERT INTO llm_call (
+            id, workspace_id, purpose, provider_id, model,
+            request_json, response_text, verdict, reject_reason,
+            duration_ms, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            entry.id,
+            entry.workspace_id,
+            entry.purpose,
+            entry.provider_id,
+            entry.model,
+            entry.request_json,
+            entry.response_text,
+            entry.verdict,
+            entry.reject_reason,
+            entry.duration_ms as i64,
+            entry.created_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_llm_calls(conn: &Connection, workspace_id: &str) -> Result<Vec<CallLogEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, workspace_id, purpose, provider_id, model,
+                request_json, response_text, verdict, reject_reason,
+                duration_ms, created_at
+         FROM llm_call WHERE workspace_id = ?1
+         ORDER BY created_at DESC, id DESC",
+    )?;
+    let rows = stmt.query_map(params![workspace_id], |row| {
+        let duration: i64 = row.get(9)?;
+        Ok(CallLogEntry {
+            id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            purpose: row.get(2)?,
+            provider_id: row.get(3)?,
+            model: row.get(4)?,
+            request_json: row.get(5)?,
+            response_text: row.get(6)?,
+            verdict: row.get(7)?,
+            reject_reason: row.get(8)?,
+            duration_ms: duration.max(0) as u64,
+            created_at: row.get(10)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub part_id: Option<String>,
+    pub wire_id: Option<String>,
+    pub goal_json: Value,
+    pub state: String,
+    pub station: Option<String>,
+    pub worktree_path: Option<String>,
+    pub dispatched_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub result_json: Option<Value>,
+}
+
+pub fn put_task(conn: &Connection, rec: &TaskRecord) -> Result<()> {
+    conn.execute(
+        "INSERT INTO task (
+            id, workspace_id, part_id, wire_id, goal_json, state, station,
+            worktree_path, dispatched_at, finished_at, result_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(id) DO UPDATE SET
+            workspace_id = excluded.workspace_id,
+            part_id = excluded.part_id,
+            wire_id = excluded.wire_id,
+            goal_json = excluded.goal_json,
+            state = excluded.state,
+            station = excluded.station,
+            worktree_path = excluded.worktree_path,
+            dispatched_at = excluded.dispatched_at,
+            finished_at = excluded.finished_at,
+            result_json = excluded.result_json",
+        params![
+            rec.id,
+            rec.workspace_id,
+            rec.part_id,
+            rec.wire_id,
+            rec.goal_json.to_string(),
+            rec.state,
+            rec.station,
+            rec.worktree_path,
+            rec.dispatched_at,
+            rec.finished_at,
+            rec.result_json.as_ref().map(|v| v.to_string()),
+        ],
+    )?;
+    Ok(())
+}
+
+fn parse_task_row(
+    id: String,
+    workspace_id: String,
+    part_id: Option<String>,
+    wire_id: Option<String>,
+    goal_raw: String,
+    state: String,
+    station: Option<String>,
+    worktree_path: Option<String>,
+    dispatched_at: Option<String>,
+    finished_at: Option<String>,
+    result_raw: Option<String>,
+) -> TaskRecord {
+    TaskRecord {
+        id,
+        workspace_id,
+        part_id,
+        wire_id,
+        goal_json: serde_json::from_str(&goal_raw).unwrap_or(Value::Null),
+        state,
+        station,
+        worktree_path,
+        dispatched_at,
+        finished_at,
+        result_json: result_raw.and_then(|s| serde_json::from_str(&s).ok()),
+    }
+}
+
+pub fn get_task(conn: &Connection, id: &str) -> Result<TaskRecord> {
+    let mut stmt = conn.prepare(
+        "SELECT id, workspace_id, part_id, wire_id, goal_json, state, station,
+                worktree_path, dispatched_at, finished_at, result_json
+         FROM task WHERE id = ?1",
+    )?;
+    stmt.query_row(params![id], |row| {
+        Ok(parse_task_row(
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+            row.get(7)?,
+            row.get(8)?,
+            row.get(9)?,
+            row.get(10)?,
+        ))
+    })
+    .optional()?
+    .ok_or_else(|| AppError::msg(format!("task not found: {id}")))
+}
+
+pub fn list_tasks(conn: &Connection, workspace_id: &str) -> Result<Vec<TaskRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, workspace_id, part_id, wire_id, goal_json, state, station,
+                worktree_path, dispatched_at, finished_at, result_json
+         FROM task WHERE workspace_id = ?1
+         ORDER BY dispatched_at IS NULL, dispatched_at DESC, id DESC",
+    )?;
+    let rows = stmt.query_map(params![workspace_id], |row| {
+        Ok(parse_task_row(
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+            row.get(7)?,
+            row.get(8)?,
+            row.get(9)?,
+            row.get(10)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+pub fn list_all_tasks(conn: &Connection) -> Result<Vec<TaskRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, workspace_id, part_id, wire_id, goal_json, state, station,
+                worktree_path, dispatched_at, finished_at, result_json
+         FROM task
+         ORDER BY dispatched_at IS NULL, dispatched_at ASC, id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(parse_task_row(
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+            row.get(7)?,
+            row.get(8)?,
+            row.get(9)?,
+            row.get(10)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+pub fn get_wire(conn: &Connection, wire_id: &str) -> Result<WireRecord> {
+    let part_id: String = conn
+        .query_row(
+            "SELECT part_id FROM wire WHERE id = ?1",
+            params![wire_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| AppError::msg(format!("wire not found: {wire_id}")))?;
+    list_wires(conn, &part_id)?
+        .into_iter()
+        .find(|w| w.id == wire_id)
+        .ok_or_else(|| AppError::msg(format!("wire not found: {wire_id}")))
+}
+
 pub fn confirm_map(
     conn: &Connection,
     workspace_id: &str,
@@ -661,5 +935,113 @@ mod tests {
         let torso = loaded.parts.iter().find(|p| p.slot == "torso").unwrap();
         assert_eq!(torso.status, "pending");
         assert!(torso.wires.is_empty());
+    }
+
+    #[test]
+    fn add_criterion_recomputes_progress_from_criteria() {
+        let (_dir, conn) = setup();
+        let ws = create_workspace(&conn, "X", "/tmp/x").unwrap();
+        let proposal = MapProposal {
+            parts: ALL_SLOTS
+                .iter()
+                .map(|slot| ProposedPart {
+                    slot: (*slot).into(),
+                    present: *slot == "head",
+                    label: "h".into(),
+                    weight: 1.0,
+                    planned_start: None,
+                    module_paths: vec![],
+                    wires: if *slot == "head" {
+                        vec![ProposedWire {
+                            label: "algo".into(),
+                            criteria: two_of_five(),
+                        }]
+                    } else {
+                        vec![]
+                    },
+                })
+                .collect(),
+        };
+        confirm_map(&conn, &ws.id, &proposal, None).unwrap();
+        let wire_id = get_workspace(&conn, &ws.id).unwrap().parts[0].wires[0]
+            .id
+            .clone();
+        let before = get_workspace(&conn, &ws.id).unwrap().parts[0].wires[0].clone();
+        assert_eq!(before.progress, 40);
+        let after = add_criterion(&conn, &wire_id, "hand-filled from facts").unwrap();
+        assert_eq!(after.criteria.len(), 6);
+        assert_eq!(after.progress, 33);
+        assert!(!after.criteria.last().unwrap().met);
+    }
+
+    #[test]
+    fn c5_task_row_round_trips_through_every_state() {
+        let (_dir, conn) = setup();
+        let ws = create_workspace(&conn, "T", "/tmp/t").unwrap();
+        let goal = serde_json::json!({
+            "task_id": "t_c5",
+            "project": { "name": "T", "root": "/tmp/t" },
+            "target": { "slot": "left_leg", "part": "infra", "wire": "ci" },
+            "user_intent_verbatim": ["keep this exactly"],
+            "attachments": [],
+            "facts": { "last_commit": "abc" },
+            "framework_advice": {
+                "next_step": "write the test",
+                "entry_point": ".",
+                "shared_risk": "shared"
+            },
+            "done_criteria": ["a", "b", "c"],
+            "assumptions": ["hand-filled"],
+            "workspace": { "worktree_path": "/tmp/data/worktrees/t_c5", "branch": "tinman/t_c5" },
+            "delivery_format": "变更说明 + 自测结果 + 未完成项",
+            "authorization": { "allow_push": false, "allow_deploy": false, "allow_spend": false }
+        });
+        let mut rec = TaskRecord {
+            id: "t_c5".into(),
+            workspace_id: ws.id.clone(),
+            part_id: Some("p".into()),
+            wire_id: Some("w".into()),
+            goal_json: goal.clone(),
+            state: "queued".into(),
+            station: Some("This PC".into()),
+            worktree_path: Some("/tmp/data/worktrees/t_c5".into()),
+            dispatched_at: Some("2026-09-09T00:00:00+00:00".into()),
+            finished_at: None,
+            result_json: Some(serde_json::json!({"command": "stub /tmp/goal.json"})),
+        };
+        for state in [
+            "queued",
+            "waiting_dispatch",
+            "running",
+            "checking",
+            "failed",
+            "paused",
+            "abandoned",
+        ] {
+            rec.state = state.into();
+            put_task(&conn, &rec).unwrap();
+            let loaded = get_task(&conn, "t_c5").unwrap();
+            assert_eq!(loaded.goal_json, goal, "goal json drifted at state {state}");
+            assert_eq!(loaded.state, state);
+            assert_eq!(loaded.worktree_path.as_deref(), Some("/tmp/data/worktrees/t_c5"));
+        }
+
+        rec.state = crate::dispatch::state_after_exit(0).into();
+        rec.finished_at = Some("2026-09-09T00:01:00+00:00".into());
+        rec.result_json = Some(serde_json::json!({"exit_code": 0, "command": "stub"}));
+        put_task(&conn, &rec).unwrap();
+        let after_zero = get_task(&conn, "t_c5").unwrap();
+        assert_eq!(after_zero.state, "checking");
+        assert_ne!(after_zero.state, "done");
+        assert_eq!(after_zero.result_json.as_ref().unwrap()["exit_code"], 0);
+        assert_eq!(after_zero.goal_json, goal);
+
+        rec.state = crate::dispatch::state_after_exit(1).into();
+        put_task(&conn, &rec).unwrap();
+        assert_eq!(get_task(&conn, "t_c5").unwrap().state, "failed");
+
+        let listed = list_tasks(&conn, &ws.id).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "t_c5");
     }
 }
