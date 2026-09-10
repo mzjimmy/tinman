@@ -63,7 +63,7 @@ describe('SettingsPanel (C2 deepseek)', () => {
       'https://api.deepseek.com',
     )
     expect((screen.getByLabelText('profile model') as HTMLInputElement).value).toBe(
-      'deepseek-flash',
+      'deepseek-chat',
     )
   })
 
@@ -78,7 +78,7 @@ describe('SettingsPanel (C2 deepseek)', () => {
       'https://api.deepseek.com',
     )
     expect((screen.getByLabelText('profile model') as HTMLInputElement).value).toBe(
-      'deepseek-flash',
+      'deepseek-chat',
     )
   })
 
@@ -107,7 +107,7 @@ describe('SettingsPanel (C2 deepseek)', () => {
       id: 'deep',
       kind: 'deepseek',
       base_url: 'https://api.deepseek.com',
-      model: 'deepseek-flash',
+      model: 'deepseek-chat',
       key_ref: 'deep-key',
     })
     expect(secret).toBe('sk-secret')

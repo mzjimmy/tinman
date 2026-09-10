@@ -14,7 +14,7 @@ describe('profilesFromPrefs', () => {
           id: 'deep',
           kind: 'deepseek',
           base_url: 'https://api.deepseek.com',
-          model: 'deepseek-flash',
+          model: 'deepseek-chat',
           key_ref: 'deep-key',
         },
       ],
@@ -24,7 +24,7 @@ describe('profilesFromPrefs', () => {
         id: 'deep',
         kind: 'deepseek',
         base_url: 'https://api.deepseek.com',
-        model: 'deepseek-flash',
+        model: 'deepseek-chat',
         key_ref: 'deep-key',
       },
     ])
@@ -34,7 +34,7 @@ describe('profilesFromPrefs', () => {
     const out = profilesFromPrefs({
       llm_profiles: [
         { id: 'a', kind: 'openai_compatible', base_url: 'https://x', model: 'm' },
-        { id: 'b', kind: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-flash' },
+        { id: 'b', kind: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-chat' },
         { id: 'c', kind: 'mystery', base_url: 'https://y', model: 'm' },
       ],
     })
@@ -49,7 +49,7 @@ describe('profilesFromPrefs', () => {
           id: 'deep',
           kind: 'deepseek',
           base_url: 'https://api.deepseek.com',
-          model: 'deepseek-flash',
+          model: 'deepseek-chat',
         },
       ],
     })

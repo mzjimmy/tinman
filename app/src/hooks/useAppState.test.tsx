@@ -58,6 +58,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       listTasks: vi.fn(async () => []),
       setWorkspaceLlmProfile: vi.fn(async () => {}),
       setLlmKey: vi.fn(async () => {}),
+      llmCall: vi.fn(),
     },
   }
 })
@@ -104,6 +105,7 @@ beforeEach(() => {
   vi.mocked(open).mockReset()
   vi.mocked(api.createWorkspace).mockReset()
   vi.mocked(api.scanWorkspace).mockReset()
+  vi.mocked(api.llmCall).mockReset()
 })
 
 afterEach(() => {
@@ -250,7 +252,7 @@ describe('saveLlmProfile (R2 C1)', () => {
           id: 'deep',
           kind: 'deepseek',
           base_url: 'https://api.deepseek.com',
-          model: 'deepseek-flash',
+          model: 'deepseek-chat',
           key_ref: 'deep',
         },
         'sk-secret',
@@ -299,7 +301,7 @@ describe('saveLlmProfile (R2 C1)', () => {
           id: 'deep',
           kind: 'deepseek',
           base_url: 'https://api.deepseek.com',
-          model: 'deepseek-flash',
+          model: 'deepseek-chat',
           key_ref: 'deep',
         },
         'sk-secret',
@@ -362,5 +364,224 @@ describe('saveLlmProfile (R2 C1)', () => {
         'save-prefs-sentinel',
       )
     })
+  })
+})
+
+/**
+ * R2 / C1 (post-fix) — composer send must not be blocked by the
+ * "当前部件没有线路，无法发送" gate when the user has a project and a
+ * (possibly empty-wires) part selected. Wires are the dispatch target,
+ * not a prerequisite for asking the LLM to draft a goal. Regression
+ * covers:
+ *   - selectedPartId set, part has no wires → no blocking banner, goalDraft
+ *     is produced and api.llmCall runs draft_goal
+ *   - selectedProjectId set, no selectedPartId → auto-resolve a part and
+ *     still produce a goalDraft
+ *   - empty draft stays a no-op (regression guard for the new gate shape)
+ *
+ * The previous gate short-circuited on `part.wires.length === 0`. The
+ * replacement gate is "no project" (error) or "project has zero parts"
+ * (error). Everything in between reaches generateGoal.
+ */
+describe('sendComposer (C1 composer send gate)', () => {
+  function partDto(opts: {
+    id: string
+    slot: string
+    label: string
+    wires: Array<{ id: string; label: string; criteria: unknown[]; progress: number; status: string }>
+  }) {
+    return {
+      id: opts.id,
+      workspace_id: 'ws-1',
+      slot: opts.slot,
+      label: opts.label,
+      weight: 2,
+      planned_start: null,
+      status: opts.wires.length === 0 ? 'unmapped' : 'pending',
+      wires: opts.wires.map((w) => ({
+        id: w.id,
+        part_id: opts.id,
+        label: w.label,
+        criteria: w.criteria,
+        progress: w.progress,
+        status: w.status,
+        updated_at: '2026-01-01T00:00:00Z',
+      })),
+    }
+  }
+
+  function workspaceDto(parts: ReturnType<typeof partDto>[]) {
+    return {
+      id: 'ws-1',
+      name: 'ws-1',
+      root_path: '/tmp/ws-1',
+      created_at: '2026-01-01T00:00:00Z',
+      llm_profile_id: null,
+      prefs: {},
+      parts,
+    }
+  }
+
+  async function bootDesktop(parts: ReturnType<typeof partDto>[]) {
+    vi.mocked(isTauri).mockReturnValue(true)
+    vi.mocked(api.listWorkspaces).mockResolvedValue([
+      {
+        id: 'ws-1',
+        name: 'ws-1',
+        root_path: '/tmp/ws-1',
+        created_at: '2026-01-01T00:00:00Z',
+        llm_profile_id: null,
+        prefs: {},
+      },
+    ])
+    vi.mocked(api.getWorkspace).mockResolvedValue(workspaceDto(parts))
+    vi.mocked(api.getAppPrefs).mockResolvedValue({})
+    vi.mocked(api.llmCall).mockResolvedValue({
+      status: 'unavailable',
+      reason: 'no_profile',
+      detail: null,
+      reject_reason: null,
+      call_id: null,
+      duration_ms: 0,
+    })
+    const capture = { current: null as AppStore | null }
+    render(<Harness capture={capture} />)
+    await waitFor(() => expect(capture.current?.ready).toBe(true))
+    await waitFor(() => expect(capture.current?.selectedProjectId).toBe('ws-1'))
+    return capture
+  }
+
+  it('c1_selected_part_with_no_wires_does_not_set_blocking_banner_and_drafts_goal', async () => {
+    const ghost = partDto({ id: 'p-ghost', slot: 'head', label: '决策 / 算法', wires: [] })
+    const capture = await bootDesktop([ghost])
+
+    act(() => {
+      capture.current!.selectPart('p-ghost')
+    })
+    act(() => {
+      capture.current!.setComposerDraft('分析这个项目')
+    })
+    await act(async () => {
+      await capture.current!.sendComposer()
+    })
+
+    // The exact blocking string must not be set.
+    expect(capture.current!.error).not.toBe('当前部件没有线路，无法发送')
+    // The goal draft must exist, with the user's intent captured verbatim.
+    expect(capture.current!.goalDraft).toBeDefined()
+    expect(capture.current!.goalDraft!.user_intent_verbatim).toEqual(['分析这个项目'])
+    // draft_goal is the analyze-project path — it must actually have run,
+    // not been short-circuited.
+    expect(api.llmCall).toHaveBeenCalledWith(
+      'ws-1',
+      'draft_goal',
+      expect.objectContaining({ intent: '分析这个项目' }),
+    )
+    // The goal card surfaces so the user can see what got proposed.
+    expect(capture.current!.showGoalCard).toBe(true)
+    // No error-banner element in the DOM.
+    expect(document.querySelector('.error-banner')).toBeNull()
+  })
+
+  it('c1_no_part_selected_with_project_auto_resolves_to_a_part_and_drafts_goal', async () => {
+    // Mixed: a ghost part (no wires) and a real part with one wire.
+    // The auto-resolver must prefer the part that has wires.
+    const ghost = partDto({ id: 'p-ghost', slot: 'head', label: '决策 / 算法', wires: [] })
+    const real = partDto({
+      id: 'p-real',
+      slot: 'torso',
+      label: '核心域',
+      wires: [
+        {
+          id: 'w-real',
+          label: '核心',
+          criteria: [{ text: '跑通', met: false, evidence: '' }],
+          progress: 0,
+          status: 'pending',
+        },
+      ],
+    })
+    const capture = await bootDesktop([ghost, real])
+
+    act(() => {
+      capture.current!.setComposerDraft('分析这个项目')
+    })
+    await act(async () => {
+      await capture.current!.sendComposer()
+    })
+
+    expect(capture.current!.error).not.toBe('当前部件没有线路，无法发送')
+    expect(capture.current!.goalDraft).toBeDefined()
+    // Auto-resolved to the part with wires (p-real), not the empty-wires ghost.
+    expect(capture.current!.selectedPartId).toBe('p-real')
+    expect(capture.current!.selectedWireId).toBe('w-real')
+    expect(capture.current!.goalDraft!.user_intent_verbatim).toEqual(['分析这个项目'])
+  })
+
+  it('c1_no_part_selected_with_only_empty_wires_parts_still_drafts_a_goal', async () => {
+    // Edge case: every part is empty. The gate must still let the LLM draft.
+    const ghost1 = partDto({ id: 'p-g1', slot: 'head', label: 'A', wires: [] })
+    const ghost2 = partDto({ id: 'p-g2', slot: 'torso', label: 'B', wires: [] })
+    const capture = await bootDesktop([ghost1, ghost2])
+
+    act(() => {
+      capture.current!.setComposerDraft('分析这个项目')
+    })
+    await act(async () => {
+      await capture.current!.sendComposer()
+    })
+
+    expect(capture.current!.error).not.toBe('当前部件没有线路，无法发送')
+    expect(capture.current!.goalDraft).toBeDefined()
+    // Falls back to project.parts[0].
+    expect(capture.current!.selectedPartId).toBe('p-g1')
+    // No wire existed, so the goal targets the 未知线路 fallback.
+    expect(capture.current!.goalDraft!.target.wire).toBe('未知线路')
+  })
+
+  it('c1_empty_draft_still_a_noop_with_new_gate', async () => {
+    const ghost = partDto({ id: 'p-ghost', slot: 'head', label: '决策 / 算法', wires: [] })
+    const capture = await bootDesktop([ghost])
+
+    act(() => {
+      capture.current!.selectPart('p-ghost')
+    })
+    act(() => {
+      capture.current!.setComposerDraft('   ')
+    })
+    await act(async () => {
+      await capture.current!.sendComposer()
+    })
+
+    expect(capture.current!.error).toBeUndefined()
+    expect(capture.current!.goalDraft).toBeUndefined()
+    expect(api.llmCall).not.toHaveBeenCalled()
+  })
+
+  it('c1_part_with_wires_still_uses_first_wire_when_no_selectedWireId', async () => {
+    const real = partDto({
+      id: 'p-real',
+      slot: 'torso',
+      label: '核心域',
+      wires: [
+        { id: 'w-1', label: 'W1', criteria: [], progress: 0, status: 'pending' },
+        { id: 'w-2', label: 'W2', criteria: [], progress: 0, status: 'pending' },
+      ],
+    })
+    const capture = await bootDesktop([real])
+
+    act(() => {
+      capture.current!.selectPart('p-real')
+    })
+    act(() => {
+      capture.current!.setComposerDraft('分析这个项目')
+    })
+    await act(async () => {
+      await capture.current!.sendComposer()
+    })
+
+    expect(capture.current!.error).toBeUndefined()
+    expect(capture.current!.goalDraft).toBeDefined()
+    expect(capture.current!.selectedWireId).toBe('w-1')
   })
 })

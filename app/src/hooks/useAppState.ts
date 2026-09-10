@@ -428,18 +428,23 @@ export function useAppState() {
     [selectedProjectId, loadWorkspace],
   )
 
+  // partIdOverride breaks the stale-selectedPartId trap: sendComposer may
+  // resolve a part (auto-select when nothing is selected) and pass it in
+  // before React has flushed the setSelectedPartId update, so this hook's
+  // closure would otherwise see the OLD selectedPartId and silently return.
   const generateGoal = useCallback(
-    async (wireId: string) => {
+    async (wireId: string, partIdOverride?: string) => {
       const project = projects.find((p) => p.id === selectedProjectId)
-      if (!project || !selectedPartId) return
+      const partId = partIdOverride ?? selectedPartId
+      if (!project || !partId) return
       setSelectedWireId(wireId)
       let advice: import('../domain/types').FrameworkAdvice | null = null
       let reason: import('../domain/types').LlmUnavailableReason | 'hand_filled' = 'hand_filled'
       if (isTauri()) {
         try {
           const result = await api.llmCall(project.id, 'draft_goal', {
-            slot: project.parts.find((p) => p.id === selectedPartId)?.slot,
-            label: project.parts.find((p) => p.id === selectedPartId)?.label,
+            slot: project.parts.find((p) => p.id === partId)?.slot,
+            label: project.parts.find((p) => p.id === partId)?.label,
             wire_id: wireId,
             intent: composerDraft,
             facts: factsById[project.id] ?? null,
@@ -458,11 +463,11 @@ export function useAppState() {
       const goal = draftGoal({
         taskId,
         project,
-        partId: selectedPartId,
+        partId,
         wireId,
         userIntentVerbatim: composerDraft ? [composerDraft] : [],
         attachments,
-        facts: factsFromPart(project, selectedPartId),
+        facts: factsFromPart(project, partId),
         advice,
         adviceUnavailableReason: advice ? undefined : reason,
         worktreePath: plannedWorktreePath(taskId, dataDir),
@@ -487,28 +492,50 @@ export function useAppState() {
     setShowGoalCard(false)
   }, [])
 
-  // R2 / C2: composer send affordance. Resolve the target wire from
-  // selectedWireId (if it belongs to the selected part) or the selected
-  // part's first wire. Empty/whitespace draft is a no-op. No part selected
-  // (or part has no wires) → visible error via setError, not silence.
-  // Then delegates to the existing generateGoal flow.
+  // Composer send = "ask the LLM to analyze this project". It needs a
+  // project (and a part to hang the goal on); it does NOT need pre-existing
+  // wires — the LLM drafts the goal, wires are the later dispatch target.
+  //
+  // Resolution order:
+  //   1. project must exist
+  //   2. target part: selectedPartId → first part with wires → project.parts[0]
+  //   3. target wire: selectedWireId (if it belongs to target part) → first
+  //      wire of target part → '' (draftGoal treats '' as 未知线路)
+  // The resolved part id is passed into generateGoal, not via a setState +
+  // call sequence, because generateGoal's closure would otherwise see the
+  // stale selectedPartId and silently return.
   const sendComposer = useCallback(async () => {
     if (!composerDraft.trim()) return
     const project = projects.find((p) => p.id === selectedProjectId)
-    if (!project || !selectedPartId) {
-      setError('请先在 Robot 视图选中一个部件')
+    if (!project) {
+      setError('请先选择一个项目')
       return
     }
-    const part = project.parts.find((p) => p.id === selectedPartId)
-    if (!part || part.wires.length === 0) {
-      setError('当前部件没有线路，无法发送')
+    let targetPartId = selectedPartId
+    if (!targetPartId) {
+      const firstWithWires = project.parts.find((p) => p.wires.length > 0)
+      targetPartId = firstWithWires?.id ?? project.parts[0]?.id
+    }
+    if (!targetPartId) {
+      setError('当前项目没有部件，无法发送')
       return
     }
-    const targetWire =
-      selectedWireId && part.wires.some((w) => w.id === selectedWireId)
-        ? selectedWireId
-        : part.wires[0]!.id
-    await generateGoal(targetWire)
+    const part = project.parts.find((p) => p.id === targetPartId)
+    let targetWireId = ''
+    if (part) {
+      if (selectedWireId && part.wires.some((w) => w.id === selectedWireId)) {
+        targetWireId = selectedWireId
+      } else if (part.wires.length > 0) {
+        targetWireId = part.wires[0]!.id
+      }
+    }
+    // Reflect the resolved selection in UI state (deferred — we also pass
+    // the id into generateGoal so it never reads the stale closure).
+    if (targetPartId !== selectedPartId) {
+      setSelectedPartId(targetPartId)
+      setSelectedWireId(targetWireId || undefined)
+    }
+    await generateGoal(targetWireId, targetPartId)
   }, [composerDraft, projects, selectedProjectId, selectedPartId, selectedWireId, generateGoal])
 
   const confirmDispatch = useCallback(async () => {
@@ -863,6 +890,7 @@ export function useAppState() {
     addCriterion,
     requestAdvice,
     generateGoal,
+    sendComposer,
     confirmDispatch,
     clearGoalDraft,
     selectTask,

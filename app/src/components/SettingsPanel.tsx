@@ -17,7 +17,7 @@ export interface SettingsPanelProps {
 const PRESETS: Record<LlmProfile['kind'], { base_url: string; model: string }> = {
   ollama: { base_url: 'http://127.0.0.1:11434/v1', model: '' },
   openai_compatible: { base_url: '', model: '' },
-  deepseek: { base_url: 'https://api.deepseek.com', model: 'deepseek-flash' },
+  deepseek: { base_url: 'https://api.deepseek.com', model: 'deepseek-chat' },
 }
 
 // A field value counts as "still a preset" if it matches the preset for some

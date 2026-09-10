@@ -293,7 +293,11 @@ describe('composer send affordance (R2 C2)', () => {
 
   it('c2_clicking_send_button_calls_sendComposer', () => {
     const sendComposer = vi.fn()
-    render(<AppShell store={fakeStore({ sendComposer })} />)
+    render(
+      <AppShell
+        store={fakeStore({ sendComposer, composerDraft: 'add a tests button' })}
+      />,
+    )
     const composer = document.querySelector('.composer') as HTMLElement
     fireEvent.click(within(composer).getByRole('button', { name: 'send' }))
     expect(sendComposer).toHaveBeenCalledTimes(1)

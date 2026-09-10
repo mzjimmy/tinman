@@ -1435,7 +1435,7 @@ mod tests {
                     "id": "deep",
                     "kind": "deepseek",
                     "base_url": "https://api.deepseek.com",
-                    "model": "deepseek-flash",
+                    "model": "deepseek-chat",
                     "key_ref": "deep-key"
                 }
             ]
@@ -1446,7 +1446,7 @@ mod tests {
         assert_eq!(p.id, "deep");
         assert_eq!(p.kind, ProviderKind::Deepseek);
         assert_eq!(p.base_url, "https://api.deepseek.com");
-        assert_eq!(p.model, "deepseek-flash");
+        assert_eq!(p.model, "deepseek-chat");
         assert_eq!(p.key_ref.as_deref(), Some("deep-key"));
     }
 
@@ -1455,7 +1455,7 @@ mod tests {
             id: "deep1".into(),
             kind: ProviderKind::Deepseek,
             base_url: "https://api.deepseek.com".into(),
-            model: "deepseek-flash".into(),
+            model: "deepseek-chat".into(),
             key_ref: Some("deep-key".into()),
         }
     }
@@ -1524,7 +1524,7 @@ mod tests {
             Ok(Capture {
                 expected: SENTINEL,
                 expected_url: "https://api.deepseek.com",
-                expected_model: "deepseek-flash",
+                expected_model: "deepseek-chat",
             })
         });
         let result = out.result.expect("typed result, not an invalid purpose");
