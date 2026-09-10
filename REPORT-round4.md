@@ -100,7 +100,26 @@ Front-end baseline before the round:
     Test Files  1 failed | 16 passed (17)
          Tests  4 failed | 128 passed (132)
 
-Front end after: PENDING — filled in below.
+Front end after:
+
+    Test Files  1 failed | 20 passed (21)
+         Tests  4 failed | 141 passed (145)
+
+128 + 13 = 141: the 13 new tests, and the same 4 pre-existing composer
+failures in `AppShell.layout.test.tsx`. No regressions.
+
+**How that number was obtained matters.** Run in place, the front-end suite
+hung: 65 minutes with no output against a 6-minute baseline, with 13 vitest
+processes blocked on mount I/O and not one of them using CPU. Copied to local
+disk (`src`, `src-tauri/src`, configs, with `node_modules` symlinked to the
+local cache) the same suite finished in **2.2 s**. The Rust suite is unaffected
+because it already builds via `CARGO_TARGET_DIR=/tmp/tinman-target`.
+
+The first local run reported 10 failures, which were an artefact of my own copy:
+`lib/ipcContract.test.ts` and six `acceptance.test.tsx` assertions read
+`../../src-tauri/src/*.rs`, and my first copy excluded `src-tauri`. Including
+the Rust sources gave the numbers above. Worth knowing before trusting any
+future local-disk run.
 
 ## What the outside agent's patch review changed
 
