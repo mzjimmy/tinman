@@ -56,6 +56,8 @@ vi.mock('../lib/api', async (importOriginal) => {
       getWorkspace: vi.fn(),
       listLlmCalls: vi.fn(async () => []),
       listTasks: vi.fn(async () => []),
+      setWorkspaceLlmProfile: vi.fn(async () => {}),
+      setLlmKey: vi.fn(async () => {}),
     },
   }
 })
@@ -226,5 +228,139 @@ describe('addFolder honesty', () => {
     cleanup()
     render(<StubDialog label="Customize" onClose={() => undefined} />)
     expect(screen.getByRole('dialog').textContent).not.toMatch(/round 2/i)
+  })
+})
+
+/**
+ * R2 / C1 — saving a profile must auto-select it (state + db + projects map),
+ * and save failures must surface via the error banner, not be swallowed.
+ *
+ * Tests run in browser mode by default (isTauri = false), which exercises the
+ * state-only path. A separate test in desktop mode exercises the db write.
+ */
+describe('saveLlmProfile (R2 C1)', () => {
+  it('c1_browser_save_sets_llmProfile_state_to_new_id', async () => {
+    const capture = await renderBrowser()
+    expect(capture.current!.llmProfile).toBe('')
+    expect(capture.current!.llmProfiles).toHaveLength(0)
+
+    await act(async () => {
+      await capture.current!.saveLlmProfile(
+        {
+          id: 'deep',
+          kind: 'deepseek',
+          base_url: 'https://api.deepseek.com',
+          model: 'deepseek-flash',
+          key_ref: 'deep',
+        },
+        'sk-secret',
+      )
+    })
+
+    expect(capture.current!.llmProfile).toBe('deep')
+    expect(capture.current!.llmProfiles.map((p) => p.id)).toEqual(['deep'])
+  })
+
+  it('c1_desktop_save_calls_setWorkspaceLlmProfile_and_updates_projects', async () => {
+    // Desktop mode + a real workspace selected so setWorkspaceLlmProfile is
+    // called against the current workspace id.
+    vi.mocked(isTauri).mockReturnValue(true)
+    vi.mocked(api.listWorkspaces).mockResolvedValue([
+      {
+        id: 'ws-1',
+        name: 'ws-1',
+        root_path: '/tmp/ws-1',
+        created_at: '2026-01-01T00:00:00Z',
+        llm_profile_id: null,
+        prefs: {},
+      },
+    ])
+    vi.mocked(api.getWorkspace).mockResolvedValue({
+      id: 'ws-1',
+      name: 'ws-1',
+      root_path: '/tmp/ws-1',
+      created_at: '2026-01-01T00:00:00Z',
+      llm_profile_id: null,
+      prefs: {},
+      parts: [],
+    })
+    vi.mocked(api.getAppPrefs).mockResolvedValue({})
+    vi.mocked(api.setWorkspaceLlmProfile).mockClear()
+    vi.mocked(api.setAppPrefs).mockClear()
+
+    const capture = { current: null as AppStore | null }
+    render(<Harness capture={capture} />)
+    await waitFor(() => expect(capture.current?.ready).toBe(true))
+    await waitFor(() => expect(capture.current?.selectedProjectId).toBe('ws-1'))
+
+    await act(async () => {
+      await capture.current!.saveLlmProfile(
+        {
+          id: 'deep',
+          kind: 'deepseek',
+          base_url: 'https://api.deepseek.com',
+          model: 'deepseek-flash',
+          key_ref: 'deep',
+        },
+        'sk-secret',
+      )
+    })
+
+    expect(capture.current!.llmProfile).toBe('deep')
+    expect(api.setWorkspaceLlmProfile).toHaveBeenCalledWith('ws-1', 'deep')
+    const project = capture.current!.projects.find((p) => p.id === 'ws-1')
+    expect(project?.llmProfileId).toBe('deep')
+    // keychain path: secret is set with the resolved key_ref
+    expect(api.setLlmKey).toHaveBeenCalledWith('deep', 'sk-secret')
+  })
+
+  it('c1_save_failure_surfaces_via_setError_banner', async () => {
+    // Initial load: getAppPrefs/setAppPrefs succeed so no error banner is up.
+    vi.mocked(isTauri).mockReturnValue(true)
+    vi.mocked(api.getAppPrefs).mockResolvedValue({})
+    vi.mocked(api.setAppPrefs).mockClear()
+    vi.mocked(api.setAppPrefs).mockResolvedValue(undefined)
+
+    const capture = { current: null as AppStore | null }
+    render(<Harness capture={capture} />)
+    await waitFor(() => expect(capture.current?.ready).toBe(true))
+    // Sanity: no error banner before the failing save
+    expect(document.querySelector('.error-banner')).toBeNull()
+
+    // Now flip setAppPrefs to reject — saveLlmProfile is the next path that
+    // calls it (persistChrome only re-fires on selectedProject/view changes).
+    let rejectOnce = false
+    vi.mocked(api.setAppPrefs).mockImplementation(async () => {
+      if (!rejectOnce) {
+        rejectOnce = true
+        throw new Error('save-prefs-sentinel')
+      }
+    })
+
+    // saveLlmProfile should catch the rejection internally; we still await
+    // so the unhandled-rejection warning doesn't escape the test runner.
+    let captured: unknown = undefined
+    await act(async () => {
+      try {
+        await capture.current!.saveLlmProfile(
+          {
+            id: 'broken',
+            kind: 'ollama',
+            base_url: 'http://127.0.0.1:11434/v1',
+            model: 'qwen2.5',
+            key_ref: null,
+          },
+        )
+      } catch (e) {
+        captured = e
+      }
+    })
+    void captured
+
+    await waitFor(() => {
+      expect(document.querySelector('.error-banner')?.textContent).toContain(
+        'save-prefs-sentinel',
+      )
+    })
   })
 })

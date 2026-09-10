@@ -32,6 +32,7 @@ pub enum Purpose {
 pub enum ProviderKind {
     OpenaiCompatible,
     Ollama,
+    Deepseek,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -254,6 +255,44 @@ impl std::fmt::Debug for ChatRequest {
     }
 }
 
+/// Largest response body read from an LLM endpoint. The client has a 45 s
+/// timeout but had no size limit, so a misbehaving or hostile endpoint could
+/// stream for 45 s straight into one String.
+pub const MAX_BODY_BYTES: u64 = 1024 * 1024;
+
+/// Longest request/response text kept in the call log. These rows are read back
+/// wholesale for the UI.
+pub const MAX_LOGGED_TEXT: usize = 32 * 1024;
+
+/// Read at most `max` bytes of a body. Returns what was read plus a marker when
+/// the cap was hit, so a truncated body cannot masquerade as a complete one.
+pub fn read_body_capped<R: std::io::Read>(reader: R, max: u64) -> std::io::Result<String> {
+    let mut buf = Vec::new();
+    let mut limited = std::io::Read::take(reader, max + 1);
+    std::io::Read::read_to_end(&mut limited, &mut buf)?;
+    let over = buf.len() as u64 > max;
+    if over {
+        buf.truncate(max as usize);
+    }
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    if over {
+        text.push_str(&format!("… [response truncated at {max} bytes]"));
+    }
+    Ok(text)
+}
+
+/// Clamp text stored in the call log.
+pub fn clamp_logged(text: &str) -> String {
+    if text.len() <= MAX_LOGGED_TEXT {
+        return text.to_string();
+    }
+    let mut cut = MAX_LOGGED_TEXT;
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}… [truncated {} bytes]", &text[..cut], text.len() - cut)
+}
+
 pub trait Transport {
     fn complete(&self, req: &ChatRequest) -> Result<String, TransportError>;
 }
@@ -294,8 +333,7 @@ impl Transport for HttpTransport {
             }
         })?;
         let status = resp.status();
-        let text = resp
-            .text()
+        let text = read_body_capped(resp, MAX_BODY_BYTES)
             .map_err(|e| TransportError::Http(scrub(&e.to_string(), req.authorization.as_deref())))?;
         let text = scrub(&text, req.authorization.as_deref());
         if !status.is_success() {
@@ -362,7 +400,7 @@ where
     let messages = build_messages(purpose, input);
     let secret = match profile.kind {
         ProviderKind::Ollama => None,
-        ProviderKind::OpenaiCompatible => {
+        ProviderKind::OpenaiCompatible | ProviderKind::Deepseek => {
             let key_ref = profile
                 .key_ref
                 .as_deref()
@@ -606,8 +644,8 @@ fn log_row(
         purpose: purpose_s,
         provider_id: profile.map(|p| p.id.clone()),
         model: profile.map(|p| p.model.clone()),
-        request_json: scrub(&payload.to_string(), secret),
-        response_text: response_text.map(|s| scrub(s, secret)),
+        request_json: clamp_logged(&scrub(&payload.to_string(), secret)),
+        response_text: response_text.map(|s| clamp_logged(&scrub(s, secret))),
         verdict: verdict.to_string(),
         reject_reason: reject_reason.map(|s| s.to_string()),
         duration_ms,
@@ -965,6 +1003,52 @@ static TEST_NAME: LazyLock<Regex> =
 
 #[cfg(test)]
 mod tests {
+
+    /// N8: the HTTP client had a time limit but no size limit.
+    #[test]
+    fn response_body_is_capped_and_says_so() {
+        let body = "b".repeat(4 * 1024 * 1024);
+        let got = read_body_capped(std::io::Cursor::new(body), 4096).unwrap();
+        assert!(got.len() <= 4096 + 64, "kept {} bytes", got.len());
+        assert!(got.contains("truncated"));
+    }
+
+    #[test]
+    fn small_body_is_returned_whole() {
+        let got = read_body_capped(std::io::Cursor::new("hello"), MAX_BODY_BYTES).unwrap();
+        assert_eq!(got, "hello");
+    }
+
+    /// The call log is read back wholesale for the UI, so neither half of a
+    /// row may be unbounded.
+    #[test]
+    fn call_log_text_is_clamped_on_both_sides() {
+        let huge = "h".repeat(2 * 1024 * 1024);
+        let entry = log_row(
+            "id-1",
+            "ws-1",
+            Purpose::AdvisePart,
+            None,
+            None,
+            &serde_json::json!({ "input": huge }),
+            Some(huge.as_str()),
+            "ok",
+            None,
+            0,
+            "2026-09-10T00:00:00Z",
+            None,
+        );
+        assert!(
+            entry.request_json.len() <= MAX_LOGGED_TEXT + 64,
+            "request kept {} bytes",
+            entry.request_json.len()
+        );
+        assert!(
+            entry.response_text.as_deref().unwrap().len() <= MAX_LOGGED_TEXT + 64,
+            "response kept {} bytes",
+            entry.response_text.as_deref().unwrap().len()
+        );
+    }
     use super::*;
     use serde_json::json;
     use std::cell::Cell;
@@ -1328,5 +1412,127 @@ mod tests {
         }
         let _ = validate(Purpose::DraftGoal, &raw, &facts()).unwrap();
         let _ = validate(Purpose::VerifyDelivery, &raw, &facts()).unwrap();
+    }
+
+    #[test]
+    fn d1_provider_kind_deepseek_round_trips_to_snake_case() {
+        // The wire value is the exact string the settings panel will save and
+        // the persistence layer will read back. Drift here breaks C1.
+        let parsed: ProviderKind = serde_json::from_value(json!("deepseek")).unwrap();
+        assert_eq!(parsed, ProviderKind::Deepseek);
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap(),
+            json!("deepseek"),
+            "serde wire value must be exactly \"deepseek\""
+        );
+    }
+
+    #[test]
+    fn d2_profiles_from_prefs_accepts_deepseek() {
+        let prefs = json!({
+            "llm_profiles": [
+                {
+                    "id": "deep",
+                    "kind": "deepseek",
+                    "base_url": "https://api.deepseek.com",
+                    "model": "deepseek-flash",
+                    "key_ref": "deep-key"
+                }
+            ]
+        });
+        let profiles = profiles_from_prefs(&prefs);
+        assert_eq!(profiles.len(), 1);
+        let p = &profiles[0];
+        assert_eq!(p.id, "deep");
+        assert_eq!(p.kind, ProviderKind::Deepseek);
+        assert_eq!(p.base_url, "https://api.deepseek.com");
+        assert_eq!(p.model, "deepseek-flash");
+        assert_eq!(p.key_ref.as_deref(), Some("deep-key"));
+    }
+
+    fn deepseek_profile() -> ProviderConfig {
+        ProviderConfig {
+            id: "deep1".into(),
+            kind: ProviderKind::Deepseek,
+            base_url: "https://api.deepseek.com".into(),
+            model: "deepseek-flash".into(),
+            key_ref: Some("deep-key".into()),
+        }
+    }
+
+    #[test]
+    fn d3_deepseek_without_key_ref_is_unavailable_no_key_no_transport() {
+        let constructed = Cell::new(false);
+        let keys = MemoryKeys::default();
+        let clock = IncClock { n: Cell::new(0) };
+        let mut p = deepseek_profile();
+        p.key_ref = None;
+        let profiles = [p];
+        let d = deps(&profiles, &keys, &clock, Some("deep1"));
+        let out = call("advise_part", &facts(), &d, || {
+            constructed.set(true);
+            Ok(Stub(Ok(clean_raw())))
+        });
+        assert!(
+            !constructed.get(),
+            "missing key_ref on a deepseek profile must not construct an HTTP client"
+        );
+        let result = out.result.expect("typed unavailable, not a purpose error");
+        match result {
+            LlmCallResult::Unavailable { reason, .. } => {
+                assert_eq!(reason, UnavailableReason::NoKey);
+            }
+            other => panic!("expected no_key, got {other:?}"),
+        }
+        let log = out.log.expect("no_key is still logged");
+        assert_eq!(log.verdict, "unavailable");
+        assert_eq!(log.reject_reason.as_deref(), Some("no_key"));
+    }
+
+    #[test]
+    fn d4_deepseek_bearer_reaches_transport_with_profile_url_and_model() {
+        const SENTINEL: &str = "sk-DEEPSEEK-SENTINEL-KEY-do-not-log";
+        let keys = MemoryKeys::default();
+        keys.insert("deep-key", SENTINEL);
+        let clock = IncClock { n: Cell::new(0) };
+        let profiles = [deepseek_profile()];
+        let d = deps(&profiles, &keys, &clock, Some("deep1"));
+        struct Capture {
+            expected: &'static str,
+            expected_url: &'static str,
+            expected_model: &'static str,
+        }
+        impl Transport for Capture {
+            fn complete(&self, req: &ChatRequest) -> Result<String, TransportError> {
+                assert_eq!(
+                    req.authorization.as_deref(),
+                    Some(self.expected),
+                    "deepseek call must send the resolved key as bearer"
+                );
+                assert_eq!(
+                    req.base_url, self.expected_url,
+                    "deepseek call must use the profile's base_url, not a backend default"
+                );
+                assert_eq!(
+                    req.model, self.expected_model,
+                    "deepseek call must use the profile's model, not a backend default"
+                );
+                Err(TransportError::Http("capture-err".into()))
+            }
+        }
+        let out = call("advise_part", &facts(), &d, || {
+            Ok(Capture {
+                expected: SENTINEL,
+                expected_url: "https://api.deepseek.com",
+                expected_model: "deepseek-flash",
+            })
+        });
+        let result = out.result.expect("typed result, not an invalid purpose");
+        let result_s = serde_json::to_string(&result).unwrap();
+        assert!(!result_s.contains(SENTINEL), "key leaked into result: {result_s}");
+        let log = out.log.expect("unavailable call is still logged");
+        let log_s = serde_json::to_string(&log).unwrap();
+        assert!(!log_s.contains(SENTINEL), "key leaked into log row: {log_s}");
+        assert!(!log.request_json.contains(SENTINEL));
     }
 }

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { MAX_STATION_COUNT } from '../domain/queue'
 import type { LlmProfile } from '../domain/types'
 
 export interface SettingsPanelProps {
@@ -9,6 +10,29 @@ export interface SettingsPanelProps {
   onSaveProfile: (profile: LlmProfile, secret?: string) => void
   onSetStationCount: (n: number) => void
   onToggleTheme: () => void
+}
+
+// Per-kind form defaults. The keys must match the wire values of
+// `LlmProfile['kind']` so the panel can prefill without hardcoding elsewhere.
+const PRESETS: Record<LlmProfile['kind'], { base_url: string; model: string }> = {
+  ollama: { base_url: 'http://127.0.0.1:11434/v1', model: '' },
+  openai_compatible: { base_url: '', model: '' },
+  deepseek: { base_url: 'https://api.deepseek.com', model: 'deepseek-flash' },
+}
+
+// A field value counts as "still a preset" if it matches the preset for some
+// known kind. Switching kind then prefills the new defaults without clobbering
+// anything the user has typed by hand.
+function isPresetValue(
+  value: string,
+  presets: Record<LlmProfile['kind'], { base_url: string; model: string }>,
+  field: 'base_url' | 'model',
+): boolean {
+  if (value === '') return true
+  for (const k of Object.keys(presets) as LlmProfile['kind'][]) {
+    if (presets[k][field] === value) return true
+  }
+  return false
 }
 
 export function SettingsPanel({
@@ -22,23 +46,36 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [id, setId] = useState('')
   const [kind, setKind] = useState<LlmProfile['kind']>('ollama')
-  const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:11434/v1')
-  const [model, setModel] = useState('')
+  const [baseUrl, setBaseUrl] = useState(PRESETS.ollama.base_url)
+  const [model, setModel] = useState(PRESETS.ollama.model)
   const [keyRef, setKeyRef] = useState('')
   const [secret, setSecret] = useState('')
+
+  function changeKind(next: LlmProfile['kind']) {
+    setKind(next)
+    const preset = PRESETS[next]
+    if (isPresetValue(baseUrl, PRESETS, 'base_url')) setBaseUrl(preset.base_url)
+    if (isPresetValue(model, PRESETS, 'model')) setModel(preset.model)
+  }
 
   function submit(e: FormEvent) {
     e.preventDefault()
     const trimmed = id.trim()
     if (!trimmed || !model.trim() || !baseUrl.trim()) return
+    const trimmedSecret = secret.trim()
+    // R2 / C1: when the user provides a key but leaves "key reference" blank,
+    // default key_ref to the profile id so the key is actually stored.
+    // Without this, the save path's `secret && profile.key_ref` check is
+    // false and the key is silently dropped (later resolves to NoKey).
+    const resolvedKeyRef = keyRef.trim() || (trimmedSecret ? trimmed : null)
     const profile: LlmProfile = {
       id: trimmed,
       kind,
       base_url: baseUrl.trim(),
       model: model.trim(),
-      key_ref: keyRef.trim() || null,
+      key_ref: resolvedKeyRef,
     }
-    onSaveProfile(profile, secret.trim() ? secret : undefined)
+    onSaveProfile(profile, trimmedSecret ? secret : undefined)
     setSecret('')
   }
 
@@ -53,6 +90,7 @@ export function SettingsPanel({
             <input
               type="number"
               min={1}
+              max={MAX_STATION_COUNT}
               aria-label="设置工位数"
               value={stationCount}
               onChange={(e) => {
@@ -86,11 +124,12 @@ export function SettingsPanel({
               kind
               <select
                 value={kind}
-                onChange={(e) => setKind(e.target.value as LlmProfile['kind'])}
+                onChange={(e) => changeKind(e.target.value as LlmProfile['kind'])}
                 aria-label="profile kind"
               >
                 <option value="ollama">ollama</option>
                 <option value="openai_compatible">openai_compatible</option>
+                <option value="deepseek">deepseek</option>
               </select>
             </label>
             <label>

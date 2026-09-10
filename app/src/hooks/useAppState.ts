@@ -16,7 +16,13 @@ import {
   deriveBoard,
   pauseTask as applyPause,
   resumeTask as applyResume,
+  clampStationCount,
 } from '../domain/queue'
+import {
+  MAX_PRELOADED_LOGS,
+  appendTaskLine,
+  capTaskLines,
+} from '../domain/logBuffer'
 import { deriveProject, fleetRanking, highestScoreSlot } from '../domain/shortLeg'
 import type { ArchitectureProposal } from '../domain/proposal'
 import type {
@@ -114,17 +120,27 @@ export function useAppState() {
         const others = prev.filter((t) => t.projectId !== id)
         return [...others, ...rows.map(taskFromRecord)]
       })
+      // Only the tasks whose output someone is plausibly looking at. The rest
+      // load on selection (selectTask), so this fan-out cannot scale with the
+      // number of tasks in the workspace.
+      const live = rows.filter((r) => r.state !== 'done' && r.state !== 'abandoned')
+      const preload = [...live, ...rows.filter((r) => !live.includes(r))].slice(
+        0,
+        MAX_PRELOADED_LOGS,
+      )
       const logs = await Promise.all(
-        rows.map(async (row) => {
+        preload.map(async (row) => {
           try {
             const lines = await api.readTaskLog(row.id)
             return [
               row.id,
-              lines.map((l) => ({
-                task_id: row.id,
-                stream: l.stream,
-                text: l.text,
-              })) as TaskOutputLine[],
+              capTaskLines(
+                lines.map((l) => ({
+                  task_id: row.id,
+                  stream: l.stream,
+                  text: l.text,
+                })),
+              ) as TaskOutputLine[],
             ] as const
           } catch {
             return [row.id, [] as TaskOutputLine[]] as const
@@ -210,7 +226,7 @@ export function useAppState() {
         setLlmProfiles(profilesFromPrefs(prefs as Record<string, unknown>))
         if (prefs.dispatchTarget) setDispatchTarget(String(prefs.dispatchTarget))
         if (typeof prefs.station_count === 'number' && prefs.station_count >= 1) {
-          setStationCountState(Math.floor(prefs.station_count))
+          setStationCountState(clampStationCount(prefs.station_count))
         }
         if (last) {
           const panel = (prefs.rightPanel as RightKind) || 'facts'
@@ -231,9 +247,16 @@ export function useAppState() {
     })()
     onScanProgress((p) => setScan(p)).then((u) => unsubs.push(u))
     onTaskOutput((e) => {
+      // Bounded on purpose: a chatty child streams for hours, and an unbounded
+      // append here grew the webview heap until the window died. logBuffer keeps
+      // the tail; the full record stays in the task's log file on disk.
       setTaskLines((m) => ({
         ...m,
-        [e.task_id]: [...(m[e.task_id] ?? []), { task_id: e.task_id, stream: e.stream, text: e.text }],
+        [e.task_id]: appendTaskLine(m[e.task_id] ?? [], {
+          task_id: e.task_id,
+          stream: e.stream,
+          text: e.text,
+        }),
       }))
     }).then((u) => unsubs.push(u))
     onTaskState((row) => {
@@ -464,6 +487,30 @@ export function useAppState() {
     setShowGoalCard(false)
   }, [])
 
+  // R2 / C2: composer send affordance. Resolve the target wire from
+  // selectedWireId (if it belongs to the selected part) or the selected
+  // part's first wire. Empty/whitespace draft is a no-op. No part selected
+  // (or part has no wires) → visible error via setError, not silence.
+  // Then delegates to the existing generateGoal flow.
+  const sendComposer = useCallback(async () => {
+    if (!composerDraft.trim()) return
+    const project = projects.find((p) => p.id === selectedProjectId)
+    if (!project || !selectedPartId) {
+      setError('请先在 Robot 视图选中一个部件')
+      return
+    }
+    const part = project.parts.find((p) => p.id === selectedPartId)
+    if (!part || part.wires.length === 0) {
+      setError('当前部件没有线路，无法发送')
+      return
+    }
+    const targetWire =
+      selectedWireId && part.wires.some((w) => w.id === selectedWireId)
+        ? selectedWireId
+        : part.wires[0]!.id
+    await generateGoal(targetWire)
+  }, [composerDraft, projects, selectedProjectId, selectedPartId, selectedWireId, generateGoal])
+
   const confirmDispatch = useCallback(async () => {
     if (!goalDraft || !selectedProjectId) return
     if (!isTauri()) {
@@ -521,7 +568,9 @@ export function useAppState() {
         const log = await api.readTaskLog(task.id)
         setTaskLines((m) => ({
           ...m,
-          [task.id]: log.map((l) => ({ task_id: task.id, stream: l.stream, text: l.text })),
+          [task.id]: capTaskLines(
+            log.map((l) => ({ task_id: task.id, stream: l.stream, text: l.text })),
+          ),
         }))
       } catch {
         /* empty log is fine */
@@ -550,11 +599,27 @@ export function useAppState() {
     stationCount,
   ])
 
+  const fetchTaskLog = useCallback(async (taskId: string) => {
+    if (!isTauri()) return
+    try {
+      const lines = await api.readTaskLog(taskId)
+      setTaskLines((m) => ({
+        ...m,
+        [taskId]: capTaskLines(
+          lines.map((l) => ({ task_id: taskId, stream: l.stream, text: l.text })),
+        ),
+      }))
+    } catch {
+      /* command missing, or the task has no log yet */
+    }
+  }, [])
+
   const selectTask = useCallback((taskId: string) => {
     setSelectedTaskId(taskId)
+    void fetchTaskLog(taskId)
     setView('task')
     setRightPanel('terminal')
-  }, [])
+  }, [fetchTaskLog])
 
   const setLlmProfile = useCallback(
     async (id: string) => {
@@ -575,21 +640,31 @@ export function useAppState() {
     [selectedProjectId],
   )
 
-  const saveLlmProfile = useCallback(async (profile: LlmProfile, secret?: string) => {
-    setLlmProfiles((prev) => [...prev.filter((p) => p.id !== profile.id), profile])
-    if (!isTauri()) return
-    try {
-      const current = await api.getAppPrefs()
-      const existing = profilesFromPrefs(current as Record<string, unknown>)
-      const next = [...existing.filter((p) => p.id !== profile.id), profile]
-      await api.setAppPrefs({ ...current, llm_profiles: next })
-      if (secret && profile.key_ref) {
-        await api.setLlmKey(profile.key_ref, secret)
+  const saveLlmProfile = useCallback(
+    async (profile: LlmProfile, secret?: string) => {
+      setLlmProfiles((prev) => [...prev.filter((p) => p.id !== profile.id), profile])
+      // R2 / C1: auto-select the saved profile. The composer's <select> already
+      // shows the first profile when llmProfile is '', which made it look active
+      // while store value was '' — llm_call then resolved profile_id = None
+      // and surfaced Unavailable NoProfile.
+      await setLlmProfile(profile.id)
+      if (!isTauri()) return
+      try {
+        const current = await api.getAppPrefs()
+        const existing = profilesFromPrefs(current as Record<string, unknown>)
+        const next = [...existing.filter((p) => p.id !== profile.id), profile]
+        await api.setAppPrefs({ ...current, llm_profiles: next })
+        if (secret && profile.key_ref) {
+          await api.setLlmKey(profile.key_ref, secret)
+        }
+      } catch (e) {
+        // R2 / C1: surface save failures via the existing error banner
+        // instead of swallowing them silently.
+        setError(String(e))
       }
-    } catch {
-      /* prefs write is best-effort */
-    }
-  }, [])
+    },
+    [setLlmProfile],
+  )
 
   const pauseTask = useCallback(
     async (id: string) => {
@@ -658,7 +733,7 @@ export function useAppState() {
 
   const setStationCount = useCallback(
     async (n: number) => {
-      const next = Math.max(1, Math.floor(n))
+      const next = clampStationCount(n)
       setStationCountState(next)
       if (isTauri()) {
         try {
