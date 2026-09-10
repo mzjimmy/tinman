@@ -1,5 +1,6 @@
 import type { AppStore } from '../hooks/useAppState'
 import type { FileNode } from '../lib/api'
+import { renderLogText } from '../domain/logBuffer'
 
 function FileTree({ node, depth = 0 }: { node: FileNode; depth?: number }) {
   if (node.kind === 'file') {
@@ -108,7 +109,7 @@ export function TerminalPane({ store }: { store: AppStore }) {
       <pre className="terminal-log" data-testid="terminal-log">
         {task
           ? lines.length > 0
-            ? lines.map((l) => `${l.stream}: ${l.text}`).join('\n')
+            ? renderLogText(lines)
             : '等待输出…'
           : '未选择任务。派发后输出会出现在这里。工位路径和命令不会被藏起来。'}
       </pre>

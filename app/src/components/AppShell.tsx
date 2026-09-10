@@ -225,6 +225,12 @@ function Composer({ store }: { store: AppStore }) {
         <input
           value={store.composerDraft}
           onChange={(e) => store.setComposerDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              void store.sendComposer()
+            }
+          }}
           placeholder="描述你想做的功能，或直接问哪块该先动"
           aria-label="composer"
         />
@@ -257,6 +263,15 @@ function Composer({ store }: { store: AppStore }) {
       )}
       <button type="button" className="ctrl icon-btn" onClick={() => store.openStub('Voice')}>
         🎤
+      </button>
+      <button
+        type="button"
+        className="ctrl icon-btn"
+        aria-label="send"
+        disabled={!store.composerDraft.trim()}
+        onClick={() => void store.sendComposer()}
+      >
+        ⏎
       </button>
       <select
         className="ctrl"

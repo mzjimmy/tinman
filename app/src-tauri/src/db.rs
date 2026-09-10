@@ -489,7 +489,8 @@ pub fn list_llm_calls(conn: &Connection, workspace_id: &str) -> Result<Vec<CallL
                 request_json, response_text, verdict, reject_reason,
                 duration_ms, created_at
          FROM llm_call WHERE workspace_id = ?1
-         ORDER BY created_at DESC, id DESC",
+         ORDER BY created_at DESC, id DESC
+         LIMIT 200",
     )?;
     let rows = stmt.query_map(params![workspace_id], |row| {
         let duration: i64 = row.get(9)?;

@@ -220,7 +220,7 @@ export function profilesFromPrefs(prefs: Record<string, unknown>): LlmProfile[] 
     if (typeof p.id !== 'string' || typeof p.model !== 'string' || typeof p.base_url !== 'string') {
       continue
     }
-    if (p.kind !== 'openai_compatible' && p.kind !== 'ollama') continue
+    if (p.kind !== 'openai_compatible' && p.kind !== 'ollama' && p.kind !== 'deepseek') continue
     out.push({
       id: p.id,
       kind: p.kind,

@@ -34,12 +34,18 @@ pub struct Board {
     pub queue: Vec<String>,
 }
 
+/// Hard ceiling on stations. Each occupied station is a child process, two
+/// reader threads and a pipe pair, and the UI renders a card per station, so an
+/// unbounded value out of prefs exhausts threads and file descriptors.
+pub const MAX_STATION_COUNT: usize = 8;
+
 pub fn station_count(prefs: &Value) -> usize {
     prefs
         .get("station_count")
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
         .filter(|&n| n >= 1)
+        .map(|n| n.min(MAX_STATION_COUNT))
         .unwrap_or(DEFAULT_STATION_COUNT)
 }
 
@@ -365,6 +371,19 @@ pub fn abandon(conn: &Connection, task_id: &str, clock: &dyn Clock) -> Result<Ta
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn station_count_is_clamped_to_the_ceiling() {
+        assert_eq!(
+            station_count(&serde_json::json!({ "station_count": 100_000 })),
+            MAX_STATION_COUNT
+        );
+        assert_eq!(station_count(&serde_json::json!({ "station_count": 4 })), 4);
+        assert_eq!(
+            station_count(&serde_json::json!({ "station_count": 0 })),
+            DEFAULT_STATION_COUNT
+        );
+    }
     use super::*;
     use crate::dispatch::{self, AgentConfig, DispatchDeps, DispatchRequest};
     use crate::runner::FrozenClock;

@@ -189,6 +189,10 @@ fn evidence_ref_in_index(reference: &str, ev: &Evidence) -> bool {
     false
 }
 
+/// Characters of a matched line kept as grounding evidence. The row is stored
+/// in SQLite and emitted to the UI, so it must not carry a 64 KiB log line.
+const EVIDENCE_SNIPPET_CHARS: usize = 120;
+
 fn ground(text: &str, ev: &Evidence) -> Option<String> {
     for f in &ev.files {
         if criterion_mentions_file(text, f) {
@@ -202,7 +206,12 @@ fn ground(text: &str, ev: &Evidence) -> Option<String> {
     }
     for line in &ev.log_lines {
         if shares_substance(text, line) {
-            return Some(format!("log:{line}"));
+            // A snippet, not the whole line: a matched line can be as long as
+            // the reader's cap, and this string is stored in SQLite and shipped
+            // to the UI. Delivery evidence below was always capped; log
+            // evidence was not.
+            let snippet: String = line.chars().take(EVIDENCE_SNIPPET_CHARS).collect();
+            return Some(format!("log:{snippet}"));
         }
     }
     if !ev.delivery.is_empty() && !is_success_claim(&ev.delivery) {
@@ -213,7 +222,7 @@ fn ground(text: &str, ev: &Evidence) -> Option<String> {
         }
         for line in ev.delivery.lines() {
             if shares_substance(text, line) {
-                let snippet: String = line.chars().take(120).collect();
+                let snippet: String = line.chars().take(EVIDENCE_SNIPPET_CHARS).collect();
                 return Some(format!("delivery:{snippet}"));
             }
         }
@@ -457,6 +466,25 @@ pub fn seed_criteria_on_wire(texts: &[&str]) -> Vec<Criterion> {
 
 #[cfg(test)]
 mod tests {
+
+    /// N5: grounding evidence is persisted and emitted; a 64 KiB log line must
+    /// not travel with it.
+    #[test]
+    fn log_evidence_is_stored_as_a_snippet_not_a_whole_line() {
+        let ev = Evidence {
+            files: Vec::new(),
+            log_lines: vec![format!("refactor the parser {}", "x".repeat(50_000))],
+            delivery: String::new(),
+            commits: Vec::new(),
+        };
+        let got = ground("refactor the parser", &ev).expect("grounded in the log");
+        assert!(got.starts_with("log:"));
+        assert!(
+            got.len() <= EVIDENCE_SNIPPET_CHARS + 8,
+            "evidence carried {} bytes",
+            got.len()
+        );
+    }
     use super::*;
     use crate::db::{self, MapProposal, ProposedPart, ProposedWire, ALL_SLOTS};
     use crate::dispatch::{self, AgentConfig, DispatchDeps, DispatchRequest};

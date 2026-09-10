@@ -270,3 +270,49 @@ describe('WP2 left / right / composer chrome', () => {
     expect(body!.textContent ?? '').toMatch(/Changes \/ Files \/ Facts/)
   })
 })
+
+/**
+ * R2 / C2 — composer must offer a send affordance. Enter in the input AND a
+ * send button both call store.sendComposer. Empty draft is a no-op.
+ */
+describe('composer send affordance (R2 C2)', () => {
+  it('c2_send_button_is_in_the_composer', () => {
+    render(<AppShell store={fakeStore()} />)
+    const composer = document.querySelector('.composer') as HTMLElement
+    expect(within(composer).getByRole('button', { name: 'send' })).toBeInTheDocument()
+  })
+
+  it('c2_enter_in_composer_input_calls_sendComposer', () => {
+    const sendComposer = vi.fn()
+    render(<AppShell store={fakeStore({ sendComposer })} />)
+    const input = screen.getByLabelText('composer') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'add a tests button' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(sendComposer).toHaveBeenCalledTimes(1)
+  })
+
+  it('c2_clicking_send_button_calls_sendComposer', () => {
+    const sendComposer = vi.fn()
+    render(
+      <AppShell
+        store={fakeStore({ sendComposer, composerDraft: 'add a tests button' })}
+      />,
+    )
+    const composer = document.querySelector('.composer') as HTMLElement
+    fireEvent.click(within(composer).getByRole('button', { name: 'send' }))
+    expect(sendComposer).toHaveBeenCalledTimes(1)
+  })
+
+  it('c2_empty_draft_is_a_noop', () => {
+    const sendComposer = vi.fn()
+    const setComposerDraft = vi.fn()
+    render(
+      <AppShell
+        store={fakeStore({ sendComposer, composerDraft: '', setComposerDraft })}
+      />,
+    )
+    const composer = document.querySelector('.composer') as HTMLElement
+    fireEvent.click(within(composer).getByRole('button', { name: 'send' }))
+    expect(sendComposer).not.toHaveBeenCalled()
+  })
+})

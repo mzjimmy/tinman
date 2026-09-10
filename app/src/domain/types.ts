@@ -106,7 +106,7 @@ export type TaskState =
 
 export interface LlmProfile {
   id: string
-  kind: 'openai_compatible' | 'ollama'
+  kind: 'openai_compatible' | 'ollama' | 'deepseek'
   base_url: string
   model: string
   key_ref?: string | null

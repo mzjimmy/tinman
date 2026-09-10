@@ -2,6 +2,7 @@ import type { AppStore } from '../hooks/useAppState'
 import type { Task } from '../domain/types'
 import {
   DEFAULT_STATION_COUNT,
+  MAX_STATION_COUNT,
   deriveBoard,
   errorFromResult,
   taskSummary,
@@ -160,6 +161,7 @@ export function TaskView({ store }: { store: AppStore }) {
           <input
             type="number"
             min={1}
+            max={MAX_STATION_COUNT}
             aria-label="工位数"
             value={count}
             onChange={(e) => {

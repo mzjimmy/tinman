@@ -62,11 +62,21 @@ export function isRunnable(task: Task, all: Task[]): boolean {
   return true
 }
 
+/// Hard ceiling on stations, mirroring queue::MAX_STATION_COUNT in Rust. Each
+/// station is a child process with two reader threads, and the fleet renders a
+/// card per station.
+export const MAX_STATION_COUNT = 8
+
+export function clampStationCount(n: number): number {
+  if (!Number.isFinite(n)) return 1
+  return Math.min(MAX_STATION_COUNT, Math.max(1, Math.floor(n)))
+}
+
 export function deriveBoard(
   tasks: Task[],
   count = DEFAULT_STATION_COUNT,
 ): { stations: Station[]; queue: string[]; stationCount: number } {
-  const n = Math.max(1, count)
+  const n = clampStationCount(count)
   const stations: Station[] = Array.from({ length: n }, (_, i) => ({
     id: String(i + 1),
     label: `工位 ${i + 1}`,

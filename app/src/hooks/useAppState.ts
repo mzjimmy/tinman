@@ -16,7 +16,13 @@ import {
   deriveBoard,
   pauseTask as applyPause,
   resumeTask as applyResume,
+  clampStationCount,
 } from '../domain/queue'
+import {
+  MAX_PRELOADED_LOGS,
+  appendTaskLine,
+  capTaskLines,
+} from '../domain/logBuffer'
 import { deriveProject, fleetRanking, highestScoreSlot } from '../domain/shortLeg'
 import type { ArchitectureProposal } from '../domain/proposal'
 import type {
@@ -114,17 +120,27 @@ export function useAppState() {
         const others = prev.filter((t) => t.projectId !== id)
         return [...others, ...rows.map(taskFromRecord)]
       })
+      // Only the tasks whose output someone is plausibly looking at. The rest
+      // load on selection (selectTask), so this fan-out cannot scale with the
+      // number of tasks in the workspace.
+      const live = rows.filter((r) => r.state !== 'done' && r.state !== 'abandoned')
+      const preload = [...live, ...rows.filter((r) => !live.includes(r))].slice(
+        0,
+        MAX_PRELOADED_LOGS,
+      )
       const logs = await Promise.all(
-        rows.map(async (row) => {
+        preload.map(async (row) => {
           try {
             const lines = await api.readTaskLog(row.id)
             return [
               row.id,
-              lines.map((l) => ({
-                task_id: row.id,
-                stream: l.stream,
-                text: l.text,
-              })) as TaskOutputLine[],
+              capTaskLines(
+                lines.map((l) => ({
+                  task_id: row.id,
+                  stream: l.stream,
+                  text: l.text,
+                })),
+              ) as TaskOutputLine[],
             ] as const
           } catch {
             return [row.id, [] as TaskOutputLine[]] as const
@@ -210,7 +226,7 @@ export function useAppState() {
         setLlmProfiles(profilesFromPrefs(prefs as Record<string, unknown>))
         if (prefs.dispatchTarget) setDispatchTarget(String(prefs.dispatchTarget))
         if (typeof prefs.station_count === 'number' && prefs.station_count >= 1) {
-          setStationCountState(Math.floor(prefs.station_count))
+          setStationCountState(clampStationCount(prefs.station_count))
         }
         if (last) {
           const panel = (prefs.rightPanel as RightKind) || 'facts'
@@ -231,9 +247,16 @@ export function useAppState() {
     })()
     onScanProgress((p) => setScan(p)).then((u) => unsubs.push(u))
     onTaskOutput((e) => {
+      // Bounded on purpose: a chatty child streams for hours, and an unbounded
+      // append here grew the webview heap until the window died. logBuffer keeps
+      // the tail; the full record stays in the task's log file on disk.
       setTaskLines((m) => ({
         ...m,
-        [e.task_id]: [...(m[e.task_id] ?? []), { task_id: e.task_id, stream: e.stream, text: e.text }],
+        [e.task_id]: appendTaskLine(m[e.task_id] ?? [], {
+          task_id: e.task_id,
+          stream: e.stream,
+          text: e.text,
+        }),
       }))
     }).then((u) => unsubs.push(u))
     onTaskState((row) => {
@@ -405,18 +428,23 @@ export function useAppState() {
     [selectedProjectId, loadWorkspace],
   )
 
+  // partIdOverride breaks the stale-selectedPartId trap: sendComposer may
+  // resolve a part (auto-select when nothing is selected) and pass it in
+  // before React has flushed the setSelectedPartId update, so this hook's
+  // closure would otherwise see the OLD selectedPartId and silently return.
   const generateGoal = useCallback(
-    async (wireId: string) => {
+    async (wireId: string, partIdOverride?: string) => {
       const project = projects.find((p) => p.id === selectedProjectId)
-      if (!project || !selectedPartId) return
+      const partId = partIdOverride ?? selectedPartId
+      if (!project || !partId) return
       setSelectedWireId(wireId)
       let advice: import('../domain/types').FrameworkAdvice | null = null
       let reason: import('../domain/types').LlmUnavailableReason | 'hand_filled' = 'hand_filled'
       if (isTauri()) {
         try {
           const result = await api.llmCall(project.id, 'draft_goal', {
-            slot: project.parts.find((p) => p.id === selectedPartId)?.slot,
-            label: project.parts.find((p) => p.id === selectedPartId)?.label,
+            slot: project.parts.find((p) => p.id === partId)?.slot,
+            label: project.parts.find((p) => p.id === partId)?.label,
             wire_id: wireId,
             intent: composerDraft,
             facts: factsById[project.id] ?? null,
@@ -435,11 +463,11 @@ export function useAppState() {
       const goal = draftGoal({
         taskId,
         project,
-        partId: selectedPartId,
+        partId,
         wireId,
         userIntentVerbatim: composerDraft ? [composerDraft] : [],
         attachments,
-        facts: factsFromPart(project, selectedPartId),
+        facts: factsFromPart(project, partId),
         advice,
         adviceUnavailableReason: advice ? undefined : reason,
         worktreePath: plannedWorktreePath(taskId, dataDir),
@@ -463,6 +491,52 @@ export function useAppState() {
     setGoalDraft(undefined)
     setShowGoalCard(false)
   }, [])
+
+  // Composer send = "ask the LLM to analyze this project". It needs a
+  // project (and a part to hang the goal on); it does NOT need pre-existing
+  // wires — the LLM drafts the goal, wires are the later dispatch target.
+  //
+  // Resolution order:
+  //   1. project must exist
+  //   2. target part: selectedPartId → first part with wires → project.parts[0]
+  //   3. target wire: selectedWireId (if it belongs to target part) → first
+  //      wire of target part → '' (draftGoal treats '' as 未知线路)
+  // The resolved part id is passed into generateGoal, not via a setState +
+  // call sequence, because generateGoal's closure would otherwise see the
+  // stale selectedPartId and silently return.
+  const sendComposer = useCallback(async () => {
+    if (!composerDraft.trim()) return
+    const project = projects.find((p) => p.id === selectedProjectId)
+    if (!project) {
+      setError('请先选择一个项目')
+      return
+    }
+    let targetPartId = selectedPartId
+    if (!targetPartId) {
+      const firstWithWires = project.parts.find((p) => p.wires.length > 0)
+      targetPartId = firstWithWires?.id ?? project.parts[0]?.id
+    }
+    if (!targetPartId) {
+      setError('当前项目没有部件，无法发送')
+      return
+    }
+    const part = project.parts.find((p) => p.id === targetPartId)
+    let targetWireId = ''
+    if (part) {
+      if (selectedWireId && part.wires.some((w) => w.id === selectedWireId)) {
+        targetWireId = selectedWireId
+      } else if (part.wires.length > 0) {
+        targetWireId = part.wires[0]!.id
+      }
+    }
+    // Reflect the resolved selection in UI state (deferred — we also pass
+    // the id into generateGoal so it never reads the stale closure).
+    if (targetPartId !== selectedPartId) {
+      setSelectedPartId(targetPartId)
+      setSelectedWireId(targetWireId || undefined)
+    }
+    await generateGoal(targetWireId, targetPartId)
+  }, [composerDraft, projects, selectedProjectId, selectedPartId, selectedWireId, generateGoal])
 
   const confirmDispatch = useCallback(async () => {
     if (!goalDraft || !selectedProjectId) return
@@ -521,7 +595,9 @@ export function useAppState() {
         const log = await api.readTaskLog(task.id)
         setTaskLines((m) => ({
           ...m,
-          [task.id]: log.map((l) => ({ task_id: task.id, stream: l.stream, text: l.text })),
+          [task.id]: capTaskLines(
+            log.map((l) => ({ task_id: task.id, stream: l.stream, text: l.text })),
+          ),
         }))
       } catch {
         /* empty log is fine */
@@ -550,11 +626,27 @@ export function useAppState() {
     stationCount,
   ])
 
+  const fetchTaskLog = useCallback(async (taskId: string) => {
+    if (!isTauri()) return
+    try {
+      const lines = await api.readTaskLog(taskId)
+      setTaskLines((m) => ({
+        ...m,
+        [taskId]: capTaskLines(
+          lines.map((l) => ({ task_id: taskId, stream: l.stream, text: l.text })),
+        ),
+      }))
+    } catch {
+      /* command missing, or the task has no log yet */
+    }
+  }, [])
+
   const selectTask = useCallback((taskId: string) => {
     setSelectedTaskId(taskId)
+    void fetchTaskLog(taskId)
     setView('task')
     setRightPanel('terminal')
-  }, [])
+  }, [fetchTaskLog])
 
   const setLlmProfile = useCallback(
     async (id: string) => {
@@ -575,21 +667,31 @@ export function useAppState() {
     [selectedProjectId],
   )
 
-  const saveLlmProfile = useCallback(async (profile: LlmProfile, secret?: string) => {
-    setLlmProfiles((prev) => [...prev.filter((p) => p.id !== profile.id), profile])
-    if (!isTauri()) return
-    try {
-      const current = await api.getAppPrefs()
-      const existing = profilesFromPrefs(current as Record<string, unknown>)
-      const next = [...existing.filter((p) => p.id !== profile.id), profile]
-      await api.setAppPrefs({ ...current, llm_profiles: next })
-      if (secret && profile.key_ref) {
-        await api.setLlmKey(profile.key_ref, secret)
+  const saveLlmProfile = useCallback(
+    async (profile: LlmProfile, secret?: string) => {
+      setLlmProfiles((prev) => [...prev.filter((p) => p.id !== profile.id), profile])
+      // R2 / C1: auto-select the saved profile. The composer's <select> already
+      // shows the first profile when llmProfile is '', which made it look active
+      // while store value was '' — llm_call then resolved profile_id = None
+      // and surfaced Unavailable NoProfile.
+      await setLlmProfile(profile.id)
+      if (!isTauri()) return
+      try {
+        const current = await api.getAppPrefs()
+        const existing = profilesFromPrefs(current as Record<string, unknown>)
+        const next = [...existing.filter((p) => p.id !== profile.id), profile]
+        await api.setAppPrefs({ ...current, llm_profiles: next })
+        if (secret && profile.key_ref) {
+          await api.setLlmKey(profile.key_ref, secret)
+        }
+      } catch (e) {
+        // R2 / C1: surface save failures via the existing error banner
+        // instead of swallowing them silently.
+        setError(String(e))
       }
-    } catch {
-      /* prefs write is best-effort */
-    }
-  }, [])
+    },
+    [setLlmProfile],
+  )
 
   const pauseTask = useCallback(
     async (id: string) => {
@@ -658,7 +760,7 @@ export function useAppState() {
 
   const setStationCount = useCallback(
     async (n: number) => {
-      const next = Math.max(1, Math.floor(n))
+      const next = clampStationCount(n)
       setStationCountState(next)
       if (isTauri()) {
         try {
@@ -788,6 +890,7 @@ export function useAppState() {
     addCriterion,
     requestAdvice,
     generateGoal,
+    sendComposer,
     confirmDispatch,
     clearGoalDraft,
     selectTask,
