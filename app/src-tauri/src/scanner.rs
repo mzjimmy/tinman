@@ -114,6 +114,17 @@ pub struct Facts {
     pub pages: Vec<String>,
 }
 
+pub fn tree_fingerprint(facts: &Facts) -> String {
+    let mut names: Vec<&str> = facts
+        .tree
+        .iter()
+        .filter(|t| t.kind == "dir")
+        .map(|t| t.name.as_str())
+        .collect();
+    names.sort_unstable();
+    names.join("\n")
+}
+
 pub fn scan(root: &Path, mut emit: impl FnMut(ScanProgress)) -> Result<Facts> {
     let root = fs::canonicalize(root)?;
     if !root.is_dir() {

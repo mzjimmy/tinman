@@ -775,6 +775,11 @@ pub fn confirm_map(
         obj.insert("mapConfirmed".into(), Value::Bool(true));
         obj.insert("modulesBySlot".into(), Value::Object(modules));
         obj.remove("mapDraft");
+        obj.remove("mapDraftSource");
+        obj.remove("mapGaps");
+        obj.remove("mapDrift");
+        obj.remove("mapDriftAdded");
+        obj.remove("mapDriftRemoved");
     }
     tx.execute(
         "UPDATE workspace SET prefs_json = ?1 WHERE id = ?2",

@@ -46,6 +46,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     onScanProgress: vi.fn(async () => () => {}),
     onTaskState: vi.fn(async () => () => {}),
     onTaskOutput: vi.fn(async () => () => {}),
+    onFactsUpdated: vi.fn(async () => () => {}),
     api: {
       ...actual.api,
       getAppPrefs: vi.fn(async () => ({ lastWorkspaceId: 'ws-1' })),

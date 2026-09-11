@@ -37,12 +37,17 @@ export function RobotView({ store }: { store: AppStore }) {
   if (store.mapOpen) {
     return (
       <MapSheet
-        proposal={store.mapDraft}
+        proposal={store.mapDrift ?? store.mapDraft}
         facts={store.facts}
         modules={store.modules}
         defaultName={selectedProject.name}
+        gaps={store.mapGaps ?? []}
+        source={store.mapDraftSource ?? 'idle'}
+        drafting={Boolean(store.mapDrafting)}
+        preserveProgress={Boolean(store.mapSheetPreserveProgress)}
         onConfirm={(proposal, name) => void store.confirmMap(proposal, name)}
         onDraft={(p) => void store.saveMapDraft(p)}
+        onDirty={store.markMapDraftDirty}
         onCancel={() => store.setMapOpen(false)}
       />
     )

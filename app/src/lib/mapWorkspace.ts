@@ -1,5 +1,7 @@
 import type { Part, PartStatus, Project, Slot, Wire } from '../domain/types'
 import { ALL_SLOTS } from '../domain/types'
+import { lastCommitDaysFor } from '../domain/proposeMap'
+import type { ArchitectureProposal } from '../domain/proposal'
 import type { Facts, PartDto, WorkspaceDto, WorkspaceSummary } from './api'
 import { relativeTime } from './relativeTime'
 
@@ -23,15 +25,16 @@ export function daysSince(iso?: string | null): number | undefined {
   return Math.max(0, Math.floor((Date.now() - t) / 86_400_000))
 }
 
-export function partFromDto(p: PartDto, facts?: Facts | null): Part {
-  const modulePaths = modulePathsFor(p.slot, facts)
+export function partFromDto(p: PartDto, facts?: Facts | null, modulePaths: string[] = []): Part {
+  const files = modulePaths.length ? modulePaths : modulePathsFor(p.slot, facts)
+  const days = lastCommitDaysFor(files, facts)
   const wires: Wire[] = p.wires.map((w) => ({
     id: w.id,
     label: w.label,
     criteria: w.criteria,
     status: asStatus(w.status) === 'unmapped' ? 'pending' : (asStatus(w.status) as Wire['status']),
     updatedAt: w.updated_at,
-    lastCommitDays: daysSince(facts?.git.last_commit_at),
+    lastCommitDays: days,
   }))
   return {
     id: p.id,
@@ -43,7 +46,7 @@ export function partFromDto(p: PartDto, facts?: Facts | null): Part {
     wires,
     facts: facts
       ? {
-          files: modulePaths.length ? modulePaths : facts.tree.slice(0, 8).map((t) => t.name),
+          files: files.length ? files : facts.tree.slice(0, 8).map((t) => t.name),
           tests:
             facts.tests.pass != null
               ? `${facts.tests.pass} passed`
@@ -66,9 +69,9 @@ export function projectFromWorkspace(ws: WorkspaceDto, facts?: Facts | null): Pr
   const mapConfirmed = Boolean(ws.prefs?.mapConfirmed)
   const modulesBySlot = (ws.prefs?.modulesBySlot ?? {}) as Record<string, string[]>
   const parts = ws.parts.map((p) => {
-    const part = partFromDto(p, facts)
-    const files = modulesBySlot[p.slot]
-    if (files?.length && part.facts) part.facts = { ...part.facts, files }
+    const files = modulesBySlot[p.slot] ?? []
+    const part = partFromDto(p, facts, files)
+    if (files.length && part.facts) part.facts = { ...part.facts, files }
     return part
   })
   const recentTasks = (facts?.git.top_files_30d ?? []).slice(0, 3).map((f) => ({
@@ -84,8 +87,25 @@ export function projectFromWorkspace(ws: WorkspaceDto, facts?: Facts | null): Pr
     recentTasks,
     lastActivityAt: (ws.prefs?.lastActivityAt as string | undefined) ?? facts?.git.last_commit_at ?? undefined,
     mapDraft: (ws.prefs?.mapDraft as Project['mapDraft']) ?? undefined,
+    mapDraftSource: parseDraftSource(ws.prefs?.mapDraftSource),
+    mapGaps: Array.isArray(ws.prefs?.mapGaps)
+      ? ws.prefs.mapGaps.filter((g): g is string => typeof g === 'string')
+      : undefined,
+    mapDrift: (ws.prefs?.mapDrift as ArchitectureProposal | undefined) ?? undefined,
+    mapDriftAdded: stringList(ws.prefs?.mapDriftAdded),
+    mapDriftRemoved: stringList(ws.prefs?.mapDriftRemoved),
     llmProfileId: ws.llm_profile_id,
   }
+}
+
+function parseDraftSource(raw: unknown): Project['mapDraftSource'] {
+  return raw === 'llm' || raw === 'heuristic' ? raw : undefined
+}
+
+function stringList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out = raw.filter((g): g is string => typeof g === 'string')
+  return out.length ? out : undefined
 }
 
 export function projectFromSummary(s: WorkspaceSummary): Project {

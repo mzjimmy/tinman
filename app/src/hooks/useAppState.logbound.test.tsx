@@ -34,6 +34,7 @@ vi.mock('../lib/api', async (importOriginal) => {
         hooks.output = undefined
       }
     }),
+    onFactsUpdated: vi.fn(async () => () => {}),
     api: {
       ...actual.api,
       getAppPrefs: vi.fn(async () => ({})),

@@ -12,8 +12,9 @@ import { AppShell } from '../components/AppShell'
 import { StubDialog } from '../components/TaskView'
 import { useAppState, type AppStore } from './useAppState'
 
-const { mockMenu } = vi.hoisted(() => ({
+const { mockMenu, mockFacts } = vi.hoisted(() => ({
   mockMenu: { handler: undefined as ((id: string) => void) | undefined },
+  mockFacts: { handler: undefined as ((e: unknown) => void) | undefined },
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
@@ -39,10 +40,17 @@ vi.mock('../lib/api', async (importOriginal) => {
     onScanProgress: vi.fn(async () => () => {}),
     onTaskOutput: vi.fn(async () => () => {}),
     onTaskState: vi.fn(async () => () => {}),
+    onFactsUpdated: vi.fn(async (handler: (e: unknown) => void) => {
+      mockFacts.handler = handler
+      return () => {
+        mockFacts.handler = undefined
+      }
+    }),
     api: {
       ...actual.api,
       getAppPrefs: vi.fn(async () => ({})),
       setAppPrefs: vi.fn(async () => {}),
+      updatePrefs: vi.fn(async () => ({})),
       listWorkspaces: vi.fn(async () => []),
       appPaths: vi.fn(async () => ({
         data_dir: '/tmp/tinman-data',
@@ -101,6 +109,7 @@ async function renderDesktop() {
 
 beforeEach(() => {
   mockMenu.handler = undefined
+  mockFacts.handler = undefined
   vi.mocked(isTauri).mockReturnValue(false)
   vi.mocked(open).mockReset()
   vi.mocked(api.createWorkspace).mockReset()
@@ -388,7 +397,13 @@ describe('sendComposer (C1 composer send gate)', () => {
     id: string
     slot: string
     label: string
-    wires: Array<{ id: string; label: string; criteria: unknown[]; progress: number; status: string }>
+    wires: Array<{
+      id: string
+      label: string
+      criteria: { text: string; met: boolean; evidence: string }[]
+      progress: number
+      status: string
+    }>
   }) {
     return {
       id: opts.id,
@@ -585,3 +600,211 @@ describe('sendComposer (C1 composer send gate)', () => {
     expect(capture.current!.selectedWireId).toBe('w-1')
   })
 })
+
+function sampleFacts(): import('../lib/api').Facts {
+  return {
+    root: '/tmp/tinman-auto',
+    scanned_at: '2026-09-11T00:00:00Z',
+    duration_ms: 12,
+    file_count: 6,
+    by_extension: { ts: 5, json: 1 },
+    loc_by_language: { TypeScript: 20 },
+    tree: [
+      { name: 'src', kind: 'dir', files: 3 },
+      { name: 'web', kind: 'dir', files: 2 },
+      { name: 'docker', kind: 'dir', files: 1 },
+    ],
+    dependencies: [],
+    entry_points: { npm_scripts: {}, makefile_targets: [], dockerfile: true, readme_commands: [] },
+    tests: { files: [], pass: null, fail: null, note: 'existence only; tests were not executed' },
+    git: {
+      branch: 'main',
+      last_commit_at: '2026-09-10T00:00:00Z',
+      last_commit_subject: 'init',
+      uncommitted: false,
+      top_files_30d: [],
+    },
+    markers: [{ kind: 'TODO', path: 'src/main.ts', line: 2 }],
+    spec_docs: [],
+    design_files: [],
+    reference_images: [],
+    routes: [],
+    api_endpoints: [],
+    pages: [],
+  }
+}
+
+describe('auto architecture draft + resident facts', () => {
+  it('addFolder prefills the map from scan facts and asks map_architecture without blocking on the model', async () => {
+    vi.mocked(open).mockResolvedValue('/tmp/tinman-auto')
+    vi.mocked(api.createWorkspace).mockResolvedValue({
+      id: 'ws-auto',
+      name: 'tinman-auto',
+      root_path: '/tmp/tinman-auto',
+      created_at: '2026-09-11T00:00:00Z',
+      llm_profile_id: null,
+      prefs: { mapConfirmed: false },
+      parts: [],
+    })
+    vi.mocked(api.scanWorkspace).mockResolvedValue(sampleFacts())
+    vi.mocked(api.llmCall).mockResolvedValue({
+      status: 'unavailable',
+      reason: 'no_profile',
+      detail: null,
+      reject_reason: null,
+      call_id: null,
+      duration_ms: 0,
+    })
+    const capture = await renderDesktop()
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('add local folder'))
+    })
+
+    await waitFor(() => expect(capture.current!.mapOpen).toBe(true))
+    const draft = capture.current!.mapDraft
+    expect(draft).toBeDefined()
+    const bySlot = Object.fromEntries((draft?.parts ?? []).map((p) => [p.slot, p]))
+    expect(bySlot.torso?.modulePaths).toContain('src/')
+    expect(bySlot.left_arm?.modulePaths).toContain('web/')
+    expect(bySlot.right_leg?.modulePaths).toContain('docker/')
+    expect(capture.current!.mapDraftSource).toBe('heuristic')
+    expect(capture.current!.mapGaps.some((g) => g.includes('测试'))).toBe(true)
+    await waitFor(() => {
+      expect(api.llmCall).toHaveBeenCalledWith('ws-auto', 'map_architecture', expect.anything())
+    })
+    expect(screen.getByRole('button', { name: '确认这份草稿' })).toBeInTheDocument()
+  })
+
+  it('upgrades the draft when map_architecture returns a valid overlay', async () => {
+    vi.mocked(open).mockResolvedValue('/tmp/tinman-auto')
+    vi.mocked(api.createWorkspace).mockResolvedValue({
+      id: 'ws-auto',
+      name: 'tinman-auto',
+      root_path: '/tmp/tinman-auto',
+      created_at: '2026-09-11T00:00:00Z',
+      llm_profile_id: 'p1',
+      prefs: { mapConfirmed: false },
+      parts: [],
+    })
+    vi.mocked(api.scanWorkspace).mockResolvedValue(sampleFacts())
+    vi.mocked(api.llmCall).mockResolvedValue({
+      status: 'available',
+      purpose: 'map_architecture',
+      advice: null,
+      output: {
+        parts: [
+          {
+            slot: 'torso',
+            present: true,
+            label: '核心域（模型）',
+            modulePaths: ['src/'],
+            wires: [
+              {
+                label: '域模型',
+                criteria: ['实体可序列化', '迁移可回放', '无直接进度写入'],
+              },
+            ],
+          },
+        ],
+      },
+      call_id: 'c1',
+      duration_ms: 20,
+    })
+    const capture = await renderDesktop()
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('add local folder'))
+    })
+    await waitFor(() => {
+      expect(capture.current!.mapDraftSource).toBe('llm')
+    })
+    expect(capture.current!.mapDraft?.parts.find((p) => p.slot === 'torso')?.label).toBe(
+      '核心域（模型）',
+    )
+  })
+
+  it('facts-updated with a new directory on a confirmed map stores a drift draft and does not flip criteria', async () => {
+    const torso = {
+      id: 'part-t',
+      workspace_id: 'ws-1',
+      slot: 'torso',
+      label: '核心',
+      weight: 3,
+      planned_start: null,
+      status: 'in_progress',
+      wires: [
+        {
+          id: 'w-t',
+          part_id: 'part-t',
+          label: '域模型',
+          criteria: [
+            { text: '实体可序列化', met: true, evidence: 'src/e.ts' },
+            { text: '迁移可回放', met: false, evidence: '' },
+            { text: '无直接进度写入', met: false, evidence: '' },
+          ],
+          progress: 33,
+          status: 'in_progress',
+          updated_at: '2026-09-11T00:00:00Z',
+        },
+      ],
+    }
+    const ws = {
+      id: 'ws-1',
+      name: 'ws-1',
+      root_path: '/tmp/ws-1',
+      created_at: '2026-01-01T00:00:00Z',
+      llm_profile_id: null,
+      prefs: { mapConfirmed: true, modulesBySlot: { torso: ['src/'] } },
+      parts: [torso],
+    }
+    vi.mocked(isTauri).mockReturnValue(true)
+    vi.mocked(api.listWorkspaces).mockResolvedValue([
+      {
+        id: 'ws-1',
+        name: 'ws-1',
+        root_path: '/tmp/ws-1',
+        created_at: '2026-01-01T00:00:00Z',
+        llm_profile_id: null,
+        prefs: { mapConfirmed: true },
+      },
+    ])
+    vi.mocked(api.getWorkspace).mockResolvedValue(ws)
+    vi.mocked(api.getFacts).mockResolvedValue(sampleFacts())
+    vi.mocked(api.getAppPrefs).mockResolvedValue({})
+    const capture = { current: null as AppStore | null }
+    render(<Harness capture={capture} />)
+    await waitFor(() => expect(capture.current?.ready).toBe(true))
+    await waitFor(() => expect(mockFacts.handler).toEqual(expect.any(Function)))
+
+    const nextFacts = {
+      ...sampleFacts(),
+      tree: [
+        { name: 'src', kind: 'dir', files: 3 },
+        { name: 'demo', kind: 'dir', files: 1 },
+      ],
+    }
+    vi.mocked(api.getFacts).mockResolvedValue(nextFacts)
+
+    await act(async () => {
+      mockFacts.handler!({
+        workspace_id: 'ws-1',
+        facts: nextFacts,
+        fingerprint: 'demo\nsrc',
+        previous_fingerprint: 'src',
+        drift: true,
+        map_confirmed: true,
+      })
+    })
+
+    await waitFor(() => {
+      expect(capture.current!.mapDriftAdded).toContain('demo/')
+    })
+    const torsoWire = capture.current!.projects
+      .find((p) => p.id === 'ws-1')
+      ?.parts.find((p) => p.slot === 'torso')
+      ?.wires[0]
+    expect(torsoWire?.criteria.filter((c) => c.met)).toHaveLength(1)
+    expect(capture.current!.mapOpen).toBe(false)
+  })
+})
+

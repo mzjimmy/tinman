@@ -25,6 +25,15 @@ import {
 } from '../domain/logBuffer'
 import { deriveProject, fleetRanking, highestScoreSlot } from '../domain/shortLeg'
 import type { ArchitectureProposal } from '../domain/proposal'
+import {
+  gapsFromFacts,
+  mergeDrift,
+  parseLlmMap,
+  proposeFromFacts,
+  proposalFromProject,
+  treeFingerprint,
+  type MapDraftSource,
+} from '../domain/proposeMap'
 import type {
   GoalCard,
   LlmAdviceView,
@@ -37,12 +46,14 @@ import type {
 import {
   api,
   isTauri,
+  onFactsUpdated,
   onMenu,
   onScanProgress,
   onTaskOutput,
   onTaskState,
   profilesFromPrefs,
   type Facts,
+  type FactsUpdatedEvent,
   type FileNode,
   type GitChanges,
   type LlmCallRow,
@@ -89,6 +100,10 @@ export function useAppState() {
   const [dataDir, setDataDir] = useState('/tmp/tinman-data')
   const [dispatchBusy, setDispatchBusy] = useState(false)
   const [stationCount, setStationCountState] = useState(DEFAULT_STATION_COUNT)
+  const [mapDrafting, setMapDrafting] = useState(false)
+  const mapOpenRef = useRef(false)
+  const draftDirtyRef = useRef(false)
+  const projectsRef = useRef<Project[]>([])
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId),
@@ -170,6 +185,91 @@ export function useAppState() {
     await loadTasks(id)
     return project
   }, [loadTasks])
+
+  const persistWorkspacePrefs = useCallback(async (id: string, patch: Record<string, unknown>) => {
+    if (!isTauri()) return
+    try {
+      await api.updatePrefs(id, patch)
+    } catch {
+      /* prefs write is best-effort */
+    }
+  }, [])
+
+  const applyFactsUpdated = useCallback(
+    (e: FactsUpdatedEvent) => {
+      setFactsById((m) => ({ ...m, [e.workspace_id]: e.facts }))
+      const current = projectsRef.current.find((p) => p.id === e.workspace_id)
+      if (!current) {
+        void loadWorkspace(e.workspace_id)
+        return
+      }
+      const heur = proposeFromFacts(e.facts)
+      const gaps = gapsFromFacts(e.facts)
+      if (!current.mapConfirmed) {
+        if (!mapOpenRef.current && !draftDirtyRef.current) {
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === e.workspace_id
+                ? {
+                    ...p,
+                    lastActivityAt: e.facts.git.last_commit_at ?? p.lastActivityAt,
+                    mapDraft: heur,
+                    mapDraftSource: 'heuristic' as MapDraftSource,
+                    mapGaps: gaps,
+                  }
+                : p,
+            ),
+          )
+          void persistWorkspacePrefs(e.workspace_id, {
+            mapDraft: heur,
+            mapDraftSource: 'heuristic',
+            mapGaps: gaps,
+            treeFingerprint: e.fingerprint,
+          })
+        } else {
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === e.workspace_id
+                ? { ...p, lastActivityAt: e.facts.git.last_commit_at ?? p.lastActivityAt }
+                : p,
+            ),
+          )
+        }
+        return
+      }
+      void loadWorkspace(e.workspace_id).then((project) => {
+        if (!e.drift || !project) return
+        const live = e.facts.tree.filter((t) => t.kind === 'dir').map((t) => `${t.name}/`)
+        const { proposal, added, removed } = mergeDrift(proposalFromProject(project), heur, live)
+        if (added.length === 0 && removed.length === 0) return
+        setProjects((prev) =>
+          prev.map((p) =>
+            p.id === e.workspace_id
+              ? {
+                  ...p,
+                  mapDrift: proposal,
+                  mapDriftAdded: added,
+                  mapDriftRemoved: removed,
+                  mapGaps: gaps,
+                }
+              : p,
+          ),
+        )
+        void persistWorkspacePrefs(e.workspace_id, {
+          mapDrift: proposal,
+          mapDriftAdded: added,
+          mapDriftRemoved: removed,
+          mapGaps: gaps,
+        })
+      })
+    },
+    [loadWorkspace, persistWorkspacePrefs],
+  )
+
+  const applyFactsUpdatedRef = useRef(applyFactsUpdated)
+  applyFactsUpdatedRef.current = applyFactsUpdated
+  projectsRef.current = projects
+  mapOpenRef.current = mapOpen
 
   const refreshSide = useCallback(async (id: string, panel: RightKind) => {
     if (!isTauri()) return
@@ -275,6 +375,7 @@ export function useAppState() {
         }).catch(() => undefined)
       }
     }).then((u) => unsubs.push(u))
+    onFactsUpdated((e) => applyFactsUpdatedRef.current(e)).then((u) => unsubs.push(u))
     onMenu((id) => {
       if (id === 'add-folder') void addFolderRef.current()
       if (id === 'view-robot') setView('robot')
@@ -319,24 +420,64 @@ export function useAppState() {
       const created = await api.createWorkspace(picked)
       setScan({ files_seen: 0, phase: 'walk', message: 'scanning…' })
       const facts = await api.scanWorkspace(created.id)
-      const project = projectFromWorkspace(created, facts)
+      const heur = proposeFromFacts(facts)
+      const gaps = gapsFromFacts(facts)
+      const fingerprint = treeFingerprint(facts)
+      const project = {
+        ...projectFromWorkspace(created, facts),
+        mapDraft: heur,
+        mapDraftSource: 'heuristic' as MapDraftSource,
+        mapGaps: gaps,
+      }
       setFactsById((m) => ({ ...m, [created.id]: facts }))
       setProjects((prev) => [project, ...prev.filter((p) => p.id !== project.id)])
       setSelectedProjectId(created.id)
       setSelectedPartId(undefined)
       setView('robot')
+      draftDirtyRef.current = false
       setMapOpen(true)
       setScan({
         files_seen: facts.file_count,
         phase: 'done',
         message: `${facts.duration_ms} ms · ${facts.file_count} files`,
       })
+      await persistWorkspacePrefs(created.id, {
+        mapDraft: heur,
+        mapDraftSource: 'heuristic',
+        mapGaps: gaps,
+        treeFingerprint: fingerprint,
+      })
       await refreshSide(created.id, rightPanel)
+      setMapDrafting(true)
+      void (async () => {
+        try {
+          if (!isTauri()) return
+          const result = await api.llmCall(created.id, 'map_architecture', { facts })
+          if (result.status !== 'available' || draftDirtyRef.current) return
+          const parsed = parseLlmMap(result.output, heur)
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === created.id
+                ? { ...p, mapDraft: parsed, mapDraftSource: 'llm' as MapDraftSource, mapGaps: gaps }
+                : p,
+            ),
+          )
+          await persistWorkspacePrefs(created.id, {
+            mapDraft: parsed,
+            mapDraftSource: 'llm',
+            mapGaps: gaps,
+          })
+        } catch {
+          /* heuristic draft stays */
+        } finally {
+          setMapDrafting(false)
+        }
+      })()
     } catch (e) {
       setError(String(e))
       setScan(null)
     }
-  }, [refreshSide, rightPanel])
+  }, [refreshSide, rightPanel, persistWorkspacePrefs])
 
   addFolderRef.current = addFolder
 
@@ -347,6 +488,7 @@ export function useAppState() {
       const facts = factsById[selectedProjectId]
       const project = projectFromWorkspace(ws, facts)
       setProjects((prev) => prev.map((p) => (p.id === project.id ? project : p)))
+      draftDirtyRef.current = false
       setMapOpen(false)
       setScan(null)
     },
@@ -355,10 +497,14 @@ export function useAppState() {
 
   const saveMapDraft = useCallback(
     async (proposal: ArchitectureProposal) => {
-      if (!selectedProjectId || !isTauri()) return
-      await api.updatePrefs(selectedProjectId, { mapDraft: proposal })
+      if (!selectedProjectId) return
+      draftDirtyRef.current = true
+      setProjects((prev) =>
+        prev.map((p) => (p.id === selectedProjectId ? { ...p, mapDraft: proposal } : p)),
+      )
+      await persistWorkspacePrefs(selectedProjectId, { mapDraft: proposal })
     },
-    [selectedProjectId],
+    [selectedProjectId, persistWorkspacePrefs],
   )
 
   const refreshLlmCalls = useCallback(async (id: string) => {
@@ -814,11 +960,21 @@ export function useAppState() {
 
   const rescan = useCallback(async () => {
     if (!selectedProjectId || !isTauri()) return
+    const previous = factsById[selectedProjectId]
+    const prevFp = previous ? treeFingerprint(previous) : null
+    const project = projectsRef.current.find((p) => p.id === selectedProjectId)
     setScan({ files_seen: 0, phase: 'walk', message: 'rescanning…' })
     try {
       const facts = await api.scanWorkspace(selectedProjectId)
-      setFactsById((m) => ({ ...m, [selectedProjectId]: facts }))
-      await loadWorkspace(selectedProjectId)
+      const fp = treeFingerprint(facts)
+      applyFactsUpdated({
+        workspace_id: selectedProjectId,
+        facts,
+        fingerprint: fp,
+        previous_fingerprint: prevFp,
+        drift: Boolean(prevFp && prevFp !== fp),
+        map_confirmed: Boolean(project?.mapConfirmed),
+      })
       setScan({
         files_seen: facts.file_count,
         phase: 'done',
@@ -828,13 +984,38 @@ export function useAppState() {
       setError(String(e))
       setScan(null)
     }
-  }, [selectedProjectId, loadWorkspace])
+  }, [selectedProjectId, factsById, applyFactsUpdated])
 
   const modules = facts ? modulesFromFacts(facts) : []
-  const mapDraft = selectedProject?.mapDraft
+  const mapDraft = selectedProject?.mapDrift ?? selectedProject?.mapDraft
   const partAdvice: LlmAdviceView = selectedPartId
     ? (adviceByPart[selectedPartId] ?? { status: 'idle' })
     : { status: 'idle' }
+
+  const markMapDraftDirty = useCallback(() => {
+    draftDirtyRef.current = true
+  }, [])
+
+  const openMapDrift = useCallback(() => {
+    setView('robot')
+    setMapOpen(true)
+  }, [])
+
+  const dismissMapDrift = useCallback(() => {
+    if (!selectedProjectId) return
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === selectedProjectId
+          ? { ...p, mapDrift: undefined, mapDriftAdded: undefined, mapDriftRemoved: undefined }
+          : p,
+      ),
+    )
+    void persistWorkspacePrefs(selectedProjectId, {
+      mapDrift: null,
+      mapDriftAdded: [],
+      mapDriftRemoved: [],
+    })
+  }, [selectedProjectId, persistWorkspacePrefs])
 
   return {
     ready,
@@ -917,7 +1098,19 @@ export function useAppState() {
     llmCalls,
     rescan,
     modules,
-    mapDraft,
+    mapDraft:
+      mapDraft ??
+      (selectedProject?.mapConfirmed ? proposalFromProject(selectedProject) : undefined),
+    mapDraftSource: selectedProject?.mapDraftSource,
+    mapGaps: selectedProject?.mapGaps ?? [],
+    mapDrift: selectedProject?.mapDrift,
+    mapDriftAdded: selectedProject?.mapDriftAdded,
+    mapDriftRemoved: selectedProject?.mapDriftRemoved,
+    mapDrafting,
+    mapSheetPreserveProgress: Boolean(selectedProject?.mapConfirmed),
+    markMapDraftDirty,
+    openMapDrift,
+    dismissMapDrift,
     scanning: scan !== null && scan.phase !== 'done',
   }
 }

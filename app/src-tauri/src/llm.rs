@@ -721,7 +721,11 @@ fn system_prompt(purpose: Purpose) -> &'static str {
         }
         Purpose::MapArchitecture => {
             "Return one JSON object and nothing else. No markdown fences, no code, no progress numbers. \
-             Propose module-to-slot mapping, wires, and draft criteria from the facts."
+             Keys: parts (exactly the slots head, torso, left_arm, right_arm, left_leg, right_leg, backpack). \
+             Each part: slot, present, label, weight, modulePaths (strings), wires: [{label, criteria: [{text}]}]. \
+             Present slots need 1+ wires and 3 to 5 criteria texts that a person can check without guessing fill height. \
+             Unused slots: present false and empty wires. Criteria are checkable outcomes, not wishes. \
+             Never output met, progress, percentages, or fractions."
         }
         Purpose::DraftGoal => {
             "Return one JSON object and nothing else. No markdown fences, no code, no progress numbers. \

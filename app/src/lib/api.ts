@@ -247,3 +247,16 @@ export function onTaskOutput(handler: (e: TaskOutputEvent) => void): Promise<Unl
 export function onTaskState(handler: (t: TaskRecord) => void): Promise<UnlistenFn> {
   return listen<TaskRecord>('task-state', (e) => handler(e.payload))
 }
+
+export interface FactsUpdatedEvent {
+  workspace_id: string
+  facts: Facts
+  fingerprint: string
+  previous_fingerprint: string | null
+  drift: boolean
+  map_confirmed: boolean
+}
+
+export function onFactsUpdated(handler: (e: FactsUpdatedEvent) => void): Promise<UnlistenFn> {
+  return listen<FactsUpdatedEvent>('facts-updated', (e) => handler(e.payload))
+}
