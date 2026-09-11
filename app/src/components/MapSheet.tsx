@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { detectGaps, statesProgress, type Gap } from '../domain/gaps'
 import { ALL_SLOTS, SLOT_LABELS, type Slot } from '../domain/types'
 import {
   applyProposal,
@@ -13,6 +14,7 @@ interface MapSheetProps {
   proposal?: ArchitectureProposal | null
   facts?: Facts
   modules: string[]
+  gaps?: Gap[]
   defaultName: string
   onConfirm: (proposal: ArchitectureProposal, name: string) => void
   onDraft?: (proposal: ArchitectureProposal) => void
@@ -23,6 +25,7 @@ export function MapSheet({
   proposal,
   facts,
   modules,
+  gaps,
   defaultName,
   onConfirm,
   onDraft,
@@ -39,6 +42,11 @@ export function MapSheet({
   useEffect(() => {
     setDraft(applyProposal(emptyProposal(), proposal))
   }, [proposal])
+
+  const shownGaps = useMemo(
+    () => (gaps ?? (facts ? detectGaps(facts) : [])).filter((g) => !statesProgress(g.text)),
+    [gaps, facts],
+  )
 
   const assigned = new Map<string, Slot>()
   for (const p of draft.parts) {
@@ -170,6 +178,17 @@ export function MapSheet({
           <span>TODO {facts.markers.length}</span>
           <span>{(facts.duration_ms / 1000).toFixed(1)}s</span>
         </div>
+      )}
+
+      {shownGaps.length > 0 && (
+        <section className="map-gaps">
+          <h3>仓库现在缺什么</h3>
+          <ul>
+            {shownGaps.map((g) => (
+              <li key={g.id}>{g.text}</li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <section className="module-assign">

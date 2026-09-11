@@ -1254,6 +1254,30 @@ select:focus-visible {
   font-size: 13px;
 }
 
+.map-gaps {
+  margin: 8px 0 16px;
+  padding: 10px 12px;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.map-gaps h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.map-gaps ul {
+  margin: 0;
+  padding-left: 1.2em;
+}
+
+.map-gaps li {
+  margin: 4px 0;
+  color: var(--text2);
+  font-size: 13px;
+}
+
 .module-assign ul {
   list-style: none;
   padding: 0;

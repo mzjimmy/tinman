@@ -10,6 +10,17 @@ import {
   plannedWorktreePath,
   taskFromRecord,
 } from '../domain/dispatch'
+import { autoDraft } from '../domain/autoMap'
+import { applyDrift, detectDrift } from '../domain/drift'
+import { detectGaps } from '../domain/gaps'
+import {
+  DEFAULT_PATROL_POLICY,
+  dueProjects,
+  emptyPatrolRecord,
+  recordFailure,
+  recordSuccess,
+  type PatrolRecord,
+} from '../domain/patrol'
 import {
   abandonTask as applyAbandon,
   DEFAULT_STATION_COUNT,
@@ -45,6 +56,34 @@ import {
 import { modulesFromFacts, projectFromSummary, projectFromWorkspace } from '../lib/mapWorkspace'
 
 export type RightKind = 'changes' | 'browser' | 'terminal' | 'files' | 'facts'
+
+/** Wake often enough to notice due work; `dueProjects` enforces the 30 min cadence. */
+const PATROL_TICK_MS = 60_000
+
+function persistPatrolRecords(records: Record<string, PatrolRecord>): void {
+  if (!isTauri()) return
+  void (async () => {
+    try {
+      const current = await api.getAppPrefs()
+      await api.setAppPrefs({ ...current, patrolRecords: records })
+    } catch {
+      /* prefs write is best-effort */
+    }
+  })()
+}
+
+type AutoMapEntry = { proposal: ArchitectureProposal; source: 'llm' | 'heuristic' }
+
+type PatrolLive = {
+  ready: boolean
+  patrolEnabled: boolean
+  projects: Project[]
+  factsById: Record<string, Facts>
+  mapOpen: boolean
+  selectedProjectId: string | undefined
+  scanning: boolean
+  records: Record<string, PatrolRecord>
+}
 
 export function useAppState() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -83,6 +122,8 @@ export function useAppState() {
   const [dataDir, setDataDir] = useState('/tmp/tinman-data')
   const [dispatchBusy, setDispatchBusy] = useState(false)
   const [stationCount, setStationCountState] = useState(DEFAULT_STATION_COUNT)
+  const [autoMapById, setAutoMapById] = useState<Record<string, AutoMapEntry>>({})
+  const [patrolEnabled, setPatrolEnabledState] = useState(true)
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId),
@@ -96,6 +137,24 @@ export function useAppState() {
   const ranking = useMemo(() => fleetRanking(projects), [projects])
   const shortLegSlot = selectedProject ? highestScoreSlot(selectedProject) : undefined
   const facts = selectedProjectId ? factsById[selectedProjectId] : undefined
+
+  const patrolLive = useRef<PatrolLive>({
+    ready: false,
+    patrolEnabled: true,
+    projects: [],
+    factsById: {},
+    mapOpen: false,
+    selectedProjectId: undefined,
+    scanning: false,
+    records: {},
+  })
+  patrolLive.current.ready = ready
+  patrolLive.current.patrolEnabled = patrolEnabled
+  patrolLive.current.projects = projects
+  patrolLive.current.factsById = factsById
+  patrolLive.current.mapOpen = mapOpen
+  patrolLive.current.selectedProjectId = selectedProjectId
+  patrolLive.current.scanning = scan !== null && scan.phase !== 'done'
 
   const persistChrome = useCallback(
     async (patch: Record<string, unknown>) => {
@@ -212,6 +271,13 @@ export function useAppState() {
         if (typeof prefs.station_count === 'number' && prefs.station_count >= 1) {
           setStationCountState(Math.floor(prefs.station_count))
         }
+        if (typeof prefs.patrolEnabled === 'boolean') {
+          setPatrolEnabledState(prefs.patrolEnabled)
+        }
+        const savedRecords = prefs.patrolRecords
+        if (savedRecords && typeof savedRecords === 'object' && !Array.isArray(savedRecords)) {
+          patrolLive.current.records = savedRecords as Record<string, PatrolRecord>
+        }
         if (last) {
           const panel = (prefs.rightPanel as RightKind) || 'facts'
           setRightPanel(panel)
@@ -297,17 +363,33 @@ export function useAppState() {
       setScan({ files_seen: 0, phase: 'walk', message: 'scanning…' })
       const facts = await api.scanWorkspace(created.id)
       const project = projectFromWorkspace(created, facts)
+      const seeded = autoDraft(facts, null)
       setFactsById((m) => ({ ...m, [created.id]: facts }))
       setProjects((prev) => [project, ...prev.filter((p) => p.id !== project.id)])
       setSelectedProjectId(created.id)
       setSelectedPartId(undefined)
       setView('robot')
+      setAutoMapById((m) => ({ ...m, [created.id]: seeded }))
       setMapOpen(true)
       setScan({
         files_seen: facts.file_count,
         phase: 'done',
         message: `${facts.duration_ms} ms · ${facts.file_count} files`,
       })
+      patrolLive.current.records = {
+        ...patrolLive.current.records,
+        [created.id]: recordSuccess(emptyPatrolRecord(created.id), Date.now(), DEFAULT_PATROL_POLICY),
+      }
+      void persistPatrolRecords(patrolLive.current.records)
+      void (async () => {
+        try {
+          const result = await api.llmCall(created.id, 'map_architecture', { facts })
+          const output = result.status === 'available' ? result.output : null
+          setAutoMapById((m) => ({ ...m, [created.id]: autoDraft(facts, output) }))
+        } catch {
+          /* keep the heuristic draft; import itself did not fail */
+        }
+      })()
       await refreshSide(created.id, rightPanel)
     } catch (e) {
       setError(String(e))
@@ -316,6 +398,54 @@ export function useAppState() {
   }, [refreshSide, rightPanel])
 
   addFolderRef.current = addFolder
+
+  useEffect(() => {
+    if (!isTauri()) return
+    let busy = false
+    const tick = async () => {
+      const live = patrolLive.current
+      if (busy || !live.ready || !live.patrolEnabled || live.scanning) return
+      busy = true
+      try {
+        const now = Date.now()
+        const recs = live.projects.map((p) => live.records[p.id] ?? emptyPatrolRecord(p.id))
+        const due = dueProjects(recs, now, DEFAULT_PATROL_POLICY)
+        // One workspace per tick. A due fleet on a slow mount must not run as a sequential pile-up.
+        const id = due.find((pid) => !(live.mapOpen && pid === live.selectedProjectId))
+        if (!id || !live.patrolEnabled) return
+        const rec = live.records[id] ?? emptyPatrolRecord(id)
+        try {
+          const prev = live.factsById[id] ?? null
+          const nextFacts = await api.scanWorkspace(id)
+          live.factsById = { ...live.factsById, [id]: nextFacts }
+          setFactsById((m) => ({ ...m, [id]: nextFacts }))
+          const snapshot = live.projects.find((p) => p.id === id)
+          if (snapshot?.mapConfirmed && prev) {
+            const findings = detectDrift(snapshot, prev, nextFacts)
+            setProjects((ps) =>
+              ps.map((p) => (p.id === id ? applyDrift(p, findings) : p)),
+            )
+          }
+          live.records = {
+            ...live.records,
+            [id]: recordSuccess(rec, Date.now(), DEFAULT_PATROL_POLICY),
+          }
+        } catch {
+          live.records = {
+            ...live.records,
+            [id]: recordFailure(rec, Date.now(), DEFAULT_PATROL_POLICY),
+          }
+        }
+        void persistPatrolRecords(live.records)
+      } finally {
+        busy = false
+      }
+    }
+    const handle = window.setInterval(() => {
+      void tick()
+    }, PATROL_TICK_MS)
+    return () => window.clearInterval(handle)
+  }, [])
 
   const confirmMap = useCallback(
     async (proposal: ArchitectureProposal, name?: string) => {
@@ -672,6 +802,19 @@ export function useAppState() {
     [],
   )
 
+  const setPatrolEnabled = useCallback((next: boolean) => {
+    setPatrolEnabledState(next)
+    if (!isTauri()) return
+    void (async () => {
+      try {
+        const current = await api.getAppPrefs()
+        await api.setAppPrefs({ ...current, patrolEnabled: next })
+      } catch {
+        /* prefs write is best-effort */
+      }
+    })()
+  }, [])
+
   const board = useMemo(() => deriveBoard(tasks, stationCount), [tasks, stationCount])
 
   const requestAdvice = useCallback(async () => {
@@ -729,7 +872,10 @@ export function useAppState() {
   }, [selectedProjectId, loadWorkspace])
 
   const modules = facts ? modulesFromFacts(facts) : []
-  const mapDraft = selectedProject?.mapDraft
+  const autoMap = selectedProjectId ? autoMapById[selectedProjectId] : undefined
+  const mapDraft = autoMap?.proposal ?? selectedProject?.mapDraft
+  const mapDraftSource = autoMap?.source
+  const gaps = useMemo(() => (facts ? detectGaps(facts) : []), [facts])
   const partAdvice: LlmAdviceView = selectedPartId
     ? (adviceByPart[selectedPartId] ?? { status: 'idle' })
     : { status: 'idle' }
@@ -815,6 +961,10 @@ export function useAppState() {
     rescan,
     modules,
     mapDraft,
+    mapDraftSource,
+    gaps,
+    patrolEnabled,
+    setPatrolEnabled,
     scanning: scan !== null && scan.phase !== 'done',
   }
 }

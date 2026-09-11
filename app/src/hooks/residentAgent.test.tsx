@@ -46,6 +46,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       listTasks: vi.fn(async () => []),
       llmCall: vi.fn(),
       updatePrefs: vi.fn(async () => ({})),
+      confirmMap: vi.fn(),
     },
   }
 })
@@ -117,6 +118,7 @@ beforeEach(() => {
   vi.mocked(api.scanWorkspace).mockReset().mockResolvedValue(facts())
   vi.mocked(api.getWorkspace).mockReset().mockResolvedValue(WS)
   vi.mocked(api.llmCall).mockReset()
+  vi.mocked(api.confirmMap).mockReset().mockResolvedValue(WS)
 })
 
 afterEach(() => {
