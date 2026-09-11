@@ -253,7 +253,7 @@ describe('R5-B: the sheet explains the repo in words, not in a percentage', () =
     expect(sheet.textContent).toContain('没有注册接口')
   })
 
-  it('INVARIANT: the sheet never prints a progress number', async () => {
+  it('INVARIANT: no gap string ever states a progress number', async () => {
     vi.mocked(api.llmCall).mockResolvedValue({
       status: 'unavailable',
       reason: 'no_key',
@@ -267,6 +267,52 @@ describe('R5-B: the sheet explains the repo in words, not in a percentage', () =
     for (const g of capture.current!.gaps) {
       expect(g.text).not.toMatch(/\d+\s*%/)
     }
+  })
+})
+
+describe('R5-B2: a late model draft must not overwrite what the user already typed', () => {
+  it('keeps the user edit when map_architecture returns after they started', async () => {
+    let release: (v: unknown) => void = () => {}
+    const pending = new Promise((r) => {
+      release = r
+    })
+    vi.mocked(api.llmCall).mockImplementation(async () => {
+      await pending
+      return {
+        status: 'available',
+        purpose: 'map_architecture',
+        advice: null,
+        output: {
+          parts: [
+            {
+              slot: 'torso',
+              present: true,
+              label: '模型后到的名字',
+              weight: 3,
+              modulePaths: [],
+              wires: [
+                { label: 'w', criteria: [{ text: 'a' }, { text: 'b' }, { text: 'c' }] },
+              ],
+            },
+          ],
+        },
+        call_id: 'c',
+        duration_ms: 1,
+      }
+    })
+    await importAFolder()
+
+    const nameField = screen.getByLabelText('torso label') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(nameField, { target: { value: '用户自己写的名字' } })
+    })
+
+    await act(async () => {
+      release(null)
+      await Promise.resolve()
+    })
+
+    expect((screen.getByLabelText('torso label') as HTMLInputElement).value).toBe('用户自己写的名字')
   })
 })
 

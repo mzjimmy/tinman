@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { detectGaps, statesProgress, type Gap } from '../domain/gaps'
 import { ALL_SLOTS, SLOT_LABELS, type Slot } from '../domain/types'
 import {
@@ -38,10 +38,19 @@ export function MapSheet({
   const [draft, setDraft] = useState<ArchitectureProposal>(initial)
   const [name, setName] = useState(defaultName)
   const [error, setError] = useState<string | undefined>()
+  // The model draft arrives after first paint. Once the user has edited the
+  // sheet, a late arrival must not take their work away underneath them.
+  const touched = useRef(false)
 
   useEffect(() => {
+    if (touched.current) return
     setDraft(applyProposal(emptyProposal(), proposal))
   }, [proposal])
+
+  function editDraft(next: (d: ArchitectureProposal) => ArchitectureProposal) {
+    touched.current = true
+    setDraft(next)
+  }
 
   const shownGaps = useMemo(
     () => (gaps ?? (facts ? detectGaps(facts) : [])).filter((g) => !statesProgress(g.text)),
@@ -54,13 +63,13 @@ export function MapSheet({
   }
 
   function setPart(slot: Slot, patch: Partial<ArchitectureProposal['parts'][number]>) {
-    setDraft((d) => ({
+    editDraft((d) => ({
       parts: d.parts.map((p) => (p.slot === slot ? { ...p, ...patch } : p)),
     }))
   }
 
   function addWire(slot: Slot) {
-    setDraft((d) => ({
+    editDraft((d) => ({
       parts: d.parts.map((p) =>
         p.slot === slot
           ? {
@@ -73,7 +82,7 @@ export function MapSheet({
   }
 
   function updateWire(slot: Slot, wi: number, label: string) {
-    setDraft((d) => ({
+    editDraft((d) => ({
       parts: d.parts.map((p) =>
         p.slot === slot
           ? { ...p, wires: p.wires.map((w, i) => (i === wi ? { ...w, label } : w)) }
@@ -83,7 +92,7 @@ export function MapSheet({
   }
 
   function updateCriterion(slot: Slot, wi: number, ci: number, text: string) {
-    setDraft((d) => ({
+    editDraft((d) => ({
       parts: d.parts.map((p) =>
         p.slot === slot
           ? {
@@ -103,7 +112,7 @@ export function MapSheet({
   }
 
   function addCriterion(slot: Slot, wi: number) {
-    setDraft((d) => ({
+    editDraft((d) => ({
       parts: d.parts.map((p) =>
         p.slot === slot
           ? {
@@ -202,7 +211,7 @@ export function MapSheet({
                 value={assigned.get(m) ?? ''}
                 onChange={(e) => {
                   const v = e.target.value as Slot | ''
-                  setDraft((d) => assignModule(d, m, v ? (v as Slot) : null))
+                  editDraft((d) => assignModule(d, m, v ? (v as Slot) : null))
                 }}
                 aria-label={`assign ${m}`}
               >
