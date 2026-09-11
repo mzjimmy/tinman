@@ -1,17 +1,8 @@
 import type { Facts } from '../lib/api'
 import { modulesFromFacts } from '../lib/mapWorkspace'
-import { SLOT_LABELS, type Project, type Slot } from './types'
+import { SLOT_LABELS, type DriftFinding, type Project, type Slot } from './types'
 
-export type DriftKind = 'module_added' | 'module_removed' | 'wire_stale'
-
-export interface DriftFinding {
-  kind: DriftKind
-  text: string
-  evidence: string[]
-  module?: string
-  slot?: Slot
-  wireId?: string
-}
+export type { DriftFinding, DriftKind } from './types'
 
 const STALE_COMMIT_FLOOR = 5
 
@@ -65,19 +56,22 @@ export function detectDrift(project: Project, prev: Facts | null, next: Facts): 
   for (const part of project.parts) {
     const modules = part.facts?.files ?? []
     if (modules.length === 0) continue
+    let hottest: { path: string; commits: number } | null = null
     for (const file of next.git.top_files_30d) {
       const before = prevCommits.get(file.path) ?? 0
       if (file.commits < STALE_COMMIT_FLOOR || file.commits <= before) continue
       if (!modules.some((m) => fileUnderModule(file.path, m))) continue
-      for (const wire of part.wires) {
-        findings.push({
-          kind: 'wire_stale',
-          slot: part.slot,
-          wireId: wire.id,
-          text: `「${wire.label}」的验收标准可能过时：对应代码最近一直在改。`,
-          evidence: [`${file.path}（30 天内 ${file.commits} 次提交）`],
-        })
-      }
+      if (!hottest || file.commits > hottest.commits) hottest = file
+    }
+    if (!hottest) continue
+    for (const wire of part.wires) {
+      findings.push({
+        kind: 'wire_stale',
+        slot: part.slot,
+        wireId: wire.id,
+        text: `「${wire.label}」的验收标准可能过时：对应代码最近一直在改。`,
+        evidence: [`${hottest.path}（30 天内 ${hottest.commits} 次提交）`],
+      })
     }
   }
 

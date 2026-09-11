@@ -63,6 +63,17 @@ export interface Part {
   advice?: FrameworkAdvice
 }
 
+export type DriftKind = 'module_added' | 'module_removed' | 'wire_stale'
+
+export interface DriftFinding {
+  kind: DriftKind
+  text: string
+  evidence: string[]
+  module?: string
+  slot?: Slot
+  wireId?: string
+}
+
 export interface Project {
   id: string
   name: string
@@ -73,6 +84,7 @@ export interface Project {
   lastActivityAt?: string
   mapDraft?: import('./proposal').ArchitectureProposal
   llmProfileId?: string | null
+  driftFindings?: DriftFinding[]
 }
 
 export interface GoalCard {

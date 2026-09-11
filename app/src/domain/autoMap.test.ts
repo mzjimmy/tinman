@@ -28,6 +28,15 @@ describe('autoMap (R4-C1): the draft the user only has to accept', () => {
     expect(slotForModule('app/', facts)).not.toBeNull()
   })
 
+  it('reads the facts when placing a container directory, rather than always guessing torso', () => {
+    // Both branches of the container rule are asserted here; the test above only
+    // reached the no-pages one, which left the interesting half unverified.
+    const noPages = makeFacts({ pages: [] })
+    const withPages = makeFacts({ pages: ['src/pages/Home.tsx'] })
+    expect(slotForModule('src/', noPages)).toBe('torso')
+    expect(slotForModule('src/', withPages)).toBe('left_arm')
+  })
+
   it('produces a complete seven-slot proposal with zero human typing', () => {
     const proposal = heuristicProposal(
       makeFacts({

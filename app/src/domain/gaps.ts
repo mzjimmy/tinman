@@ -66,11 +66,12 @@ export function detectGaps(facts: Facts): Gap[] {
     })
   }
   if ((loginPages.length > 0 || registerPages.length > 0) && !hasRegisterApi) {
-    const pages = loginPages.length ? loginPages : registerPages
+    const fromLogin = loginPages.length > 0
+    const pages = fromLogin ? loginPages : registerPages
     gaps.push({
       id: 'missing_counterpart:register-api',
       kind: 'missing_counterpart',
-      text: '有登录页文件，但没有注册接口',
+      text: fromLogin ? '有登录页文件，但没有注册接口' : '有注册页文件，但没有注册接口',
       evidence: [...pages, ...facts.api_endpoints],
     })
   }

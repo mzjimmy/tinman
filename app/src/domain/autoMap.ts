@@ -119,11 +119,14 @@ function nameMatches(name: string, keys: readonly string[]): boolean {
   return keys.some((key) => name === key || tokens.includes(key))
 }
 
-export function slotForModule(modulePath: string, _facts: Facts): Slot | null {
+export function slotForModule(modulePath: string, facts: Facts): Slot | null {
   const name = dirName(modulePath)
   if (!name) return null
   for (const row of SLOT_KEYWORDS) {
     if (nameMatches(name, row.keys)) return row.slot
+  }
+  if (name === 'src' || name === 'app') {
+    return facts.pages.length > 0 ? 'left_arm' : 'torso'
   }
   return null
 }
@@ -311,6 +314,8 @@ export function autoDraft(
 ): { proposal: ArchitectureProposal; source: 'llm' | 'heuristic' } {
   const heuristic = heuristicProposal(facts)
   const sanitized = sanitizeLlmProposal(llmOutput)
-  if (!sanitized) return { proposal: heuristic, source: 'heuristic' }
+  if (!sanitized || sanitized.parts.length === 0) {
+    return { proposal: heuristic, source: 'heuristic' }
+  }
   return { proposal: applyProposal(heuristic, sanitized), source: 'llm' }
 }
