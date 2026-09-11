@@ -77,12 +77,22 @@ pub struct FileTouch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DirTouch {
+    pub dir: String,
+    pub commits: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct GitFacts {
     pub branch: Option<String>,
     pub last_commit_at: Option<String>,
     pub last_commit_subject: Option<String>,
     pub uncommitted: bool,
     pub top_files_30d: Vec<FileTouch>,
+    /// Uncapped per-top-level-directory fold of the 30-day file counts.
+    /// `serde(default)` so facts.json written before this field still loads.
+    #[serde(default)]
+    pub dirs_30d: Vec<DirTouch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -712,6 +722,23 @@ fn collect_git(root: &Path) -> GitFacts {
             *counts.entry(line.to_string()).or_insert(0) += 1;
         }
     }
+    // Fold by first path segment before truncating the file list. Root-level
+    // files (no `/`) map to no slot — skip them.
+    let mut dir_counts: BTreeMap<String, u64> = BTreeMap::new();
+    for (path, commits) in &counts {
+        if let Some((head, _)) = path.split_once('/') {
+            if head.is_empty() {
+                continue;
+            }
+            let dir = format!("{head}/");
+            *dir_counts.entry(dir).or_insert(0) += *commits;
+        }
+    }
+    let mut dirs_30d: Vec<DirTouch> = dir_counts
+        .into_iter()
+        .map(|(dir, commits)| DirTouch { dir, commits })
+        .collect();
+    dirs_30d.sort_by(|a, b| b.commits.cmp(&a.commits).then(a.dir.cmp(&b.dir)));
     let mut top: Vec<FileTouch> = counts
         .into_iter()
         .map(|(path, commits)| FileTouch { path, commits })
@@ -724,6 +751,7 @@ fn collect_git(root: &Path) -> GitFacts {
         last_commit_subject,
         uncommitted,
         top_files_30d: top,
+        dirs_30d,
     }
 }
 

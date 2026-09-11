@@ -36,6 +36,11 @@ function mappedModulesOf(part: Part): string[] {
   return files.filter((f) => f.includes('/'))
 }
 
+/** First-segment dirs and possibly-deeper module paths: overlap either way. */
+function dirTouchesModule(dir: string, modulePath: string): boolean {
+  return fileUnderModule(dir, modulePath) || fileUnderModule(modulePath, dir)
+}
+
 export function partStalenessDays(
   facts: Facts | null | undefined,
   modulePaths: string[],
@@ -44,6 +49,15 @@ export function partStalenessDays(
   const recency = daysSince(facts?.git.last_commit_at, now ?? Date.now())
   if (recency === undefined) return undefined
   if (modulePaths.length === 0) return recency
+
+  // Uncapped aggregate is authority when present (including empty). Missing
+  // means older cached facts — fall through to the round-6 file-list path.
+  const dirs = facts?.git.dirs_30d
+  if (dirs !== undefined) {
+    const touched = modulePaths.some((mod) => dirs.some((d) => dirTouchesModule(d.dir, mod)))
+    if (touched) return recency
+    return Math.max(recency, STALE_AFTER_DAYS + 1)
+  }
 
   const top = facts?.git.top_files_30d ?? []
   const touched = modulePaths.some((mod) => top.some((f) => fileUnderModule(f.path, mod)))
