@@ -45,7 +45,7 @@ export interface Facts {
     uncommitted: boolean
     top_files_30d: { path: string; commits: number }[]
     /** Absent on facts.json written before round 7. Empty is not absent. */
-    dirs_30d?: { dir: string; commits: number }[]
+    dirs_30d?: { dir: string; touches: number }[]
   }
   markers: { kind: string; path: string; line: number }[]
   spec_docs: string[]

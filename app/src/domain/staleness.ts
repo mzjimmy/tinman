@@ -36,9 +36,15 @@ function mappedModulesOf(part: Part): string[] {
   return files.filter((f) => f.includes('/'))
 }
 
-/** First-segment dirs and possibly-deeper module paths: overlap either way. */
+/**
+ * The aggregate emits every directory prefix, so a touched directory at or below
+ * the mapped module always appears in its own right. Matching only downward is
+ * therefore both sufficient and necessary: matching upward too would let an
+ * abandoned `packages/web/` borrow the activity of a busy sibling `packages/api/`
+ * through their shared parent.
+ */
 function dirTouchesModule(dir: string, modulePath: string): boolean {
-  return fileUnderModule(dir, modulePath) || fileUnderModule(modulePath, dir)
+  return fileUnderModule(dir, modulePath)
 }
 
 export function partStalenessDays(

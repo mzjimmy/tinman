@@ -111,7 +111,7 @@ describe('partStalenessDays (R7): the top-10 file cap must not make this inert',
     commits: 20 - i,
   }))
 
-  function saturated(dirs?: { dir: string; commits: number }[]): ReturnType<typeof makeFacts> {
+  function saturated(dirs?: { dir: string; touches: number }[]): ReturnType<typeof makeFacts> {
     return makeFacts({
       git: {
         branch: 'main',
@@ -125,14 +125,14 @@ describe('partStalenessDays (R7): the top-10 file cap must not make this inert',
   }
 
   it('still calls an untouched module stale even when the file list is saturated', () => {
-    const facts = saturated([{ dir: 'hot/', commits: 120 }])
+    const facts = saturated([{ dir: 'hot/', touches: 120 }])
     expect(partStalenessDays(facts, ['infra/'], NOW)).toBeGreaterThan(30)
   })
 
   it('does not call a module stale when the directory aggregate shows activity', () => {
     const facts = saturated([
-      { dir: 'hot/', commits: 120 },
-      { dir: 'infra/', commits: 2 },
+      { dir: 'hot/', touches: 120 },
+      { dir: 'infra/', touches: 2 },
     ])
     expect(partStalenessDays(facts, ['infra/'], NOW)).toBe(1)
   })
@@ -151,12 +151,43 @@ describe('partStalenessDays (R7): the top-10 file cap must not make this inert',
         uncommitted: false,
         top_files_30d: [{ path: 'hot/a.ts', commits: 3 }],
         dirs_30d: [
-          { dir: 'hot/', commits: 3 },
-          { dir: 'infra/', commits: 1 },
+          { dir: 'hot/', touches: 3 },
+          { dir: 'infra/', touches: 1 },
         ],
       } as ReturnType<typeof makeFacts>['git'],
     })
     expect(partStalenessDays(facts, ['infra/'], NOW)).toBe(1)
     expect(partStalenessDays(facts, ['legacy/'], NOW)).toBeGreaterThan(30)
+  })
+})
+
+describe('partStalenessDays (R8): siblings under a shared parent must separate', () => {
+  // The monorepo shape: every slot lives under packages/. With only a
+  // first-segment aggregate, one commit anywhere keeps every sibling looking
+  // alive — the top-10 cap failure on a different axis.
+  const facts = makeFacts({
+    git: {
+      branch: 'main',
+      last_commit_at: '2026-09-10T00:00:00Z',
+      last_commit_subject: 'api work',
+      uncommitted: false,
+      top_files_30d: [{ path: 'packages/api/a.ts', commits: 4 }],
+      dirs_30d: [
+        { dir: 'packages/', touches: 4 },
+        { dir: 'packages/api/', touches: 4 },
+      ],
+    } as ReturnType<typeof makeFacts>['git'],
+  })
+
+  it('keeps the worked-on child fresh', () => {
+    expect(partStalenessDays(facts, ['packages/api/'], NOW)).toBe(1)
+  })
+
+  it('calls the untouched sibling stale instead of borrowing its parent activity', () => {
+    expect(partStalenessDays(facts, ['packages/web/'], NOW)).toBeGreaterThan(30)
+  })
+
+  it('a part mapped to the shared parent itself is still fresh', () => {
+    expect(partStalenessDays(facts, ['packages/'], NOW)).toBe(1)
   })
 })

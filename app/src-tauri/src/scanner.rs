@@ -79,7 +79,10 @@ pub struct FileTouch {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct DirTouch {
     pub dir: String,
-    pub commits: u64,
+    /// Sum of per-file touch counts under this prefix, NOT unique commits: one
+    /// commit editing five files under `hot/` contributes five. Named `touches`
+    /// so nobody reads it as a commit count.
+    pub touches: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -724,21 +727,30 @@ fn collect_git(root: &Path) -> GitFacts {
     }
     // Fold by first path segment before truncating the file list. Root-level
     // files (no `/`) map to no slot — skip them.
+    // Every directory prefix, not just the first segment. A monorepo whose slots
+    // all live under `packages/` would otherwise get one bucket, and an abandoned
+    // packages/web would read as alive because packages/api was busy — the same
+    // failure as the top-10 file cap, on a different axis. Prefixes in a real
+    // repo number in the tens, so this needs no cap either.
     let mut dir_counts: BTreeMap<String, u64> = BTreeMap::new();
-    for (path, commits) in &counts {
-        if let Some((head, _)) = path.split_once('/') {
-            if head.is_empty() {
-                continue;
+    for (path, touches) in &counts {
+        let mut idx = 0usize;
+        while let Some(pos) = path[idx..].find('/') {
+            let end = idx + pos;
+            if end == 0 {
+                break;
             }
-            let dir = format!("{head}/");
-            *dir_counts.entry(dir).or_insert(0) += *commits;
+            *dir_counts
+                .entry(format!("{}/", &path[..end]))
+                .or_insert(0) += *touches;
+            idx = end + 1;
         }
     }
     let mut dirs_30d: Vec<DirTouch> = dir_counts
         .into_iter()
-        .map(|(dir, commits)| DirTouch { dir, commits })
+        .map(|(dir, touches)| DirTouch { dir, touches })
         .collect();
-    dirs_30d.sort_by(|a, b| b.commits.cmp(&a.commits).then(a.dir.cmp(&b.dir)));
+    dirs_30d.sort_by(|a, b| b.touches.cmp(&a.touches).then(a.dir.cmp(&b.dir)));
     let mut top: Vec<FileTouch> = counts
         .into_iter()
         .map(|(path, commits)| FileTouch { path, commits })
@@ -978,7 +990,7 @@ mod tests {
         assert_eq!(g.top_files_30d.len(), 10, "top_files_30d is truncated to 10");
 
         let dirs: std::collections::BTreeMap<&str, u64> =
-            g.dirs_30d.iter().map(|d| (d.dir.as_str(), d.commits)).collect();
+            g.dirs_30d.iter().map(|d| (d.dir.as_str(), d.touches)).collect();
         assert!(dirs.contains_key("hot/"), "busy dir present: {dirs:?}");
         assert!(
             dirs.contains_key("quiet/"),
@@ -994,5 +1006,39 @@ mod tests {
         std::fs::write(tmp.path().join("a.txt"), "x").unwrap();
         let g = collect_git(tmp.path());
         assert!(g.dirs_30d.is_empty());
+    }
+
+    /// A monorepo shape: two sibling slots under one shared parent.
+    fn monorepo(tmp: &std::path::Path) {
+        git_cmd(tmp, &["init", "-q"]);
+        git_cmd(tmp, &["config", "user.email", "t@example.com"]);
+        git_cmd(tmp, &["config", "user.name", "t"]);
+        std::fs::create_dir_all(tmp.join("packages/api")).unwrap();
+        std::fs::create_dir_all(tmp.join("packages/web")).unwrap();
+        std::fs::write(tmp.join("packages/api/a.ts"), "// a").unwrap();
+        git_cmd(tmp, &["add", "-A"]);
+        git_cmd(tmp, &["commit", "-q", "-m", "api only"]);
+    }
+
+    #[test]
+    fn r8_dirs_30d_separates_siblings_under_a_shared_parent() {
+        // A first-segment-only fold gives `packages/` one bucket, so an abandoned
+        // packages/web looks exactly as alive as the packages/api being worked on.
+        // That is the top-10 cap failure again on a different axis.
+        let tmp = tempfile::tempdir().unwrap();
+        monorepo(tmp.path());
+        let g = collect_git(tmp.path());
+        let dirs: std::collections::BTreeMap<&str, u64> =
+            g.dirs_30d.iter().map(|d| (d.dir.as_str(), d.touches)).collect();
+
+        assert!(dirs.contains_key("packages/"), "parent prefix still emitted: {dirs:?}");
+        assert!(
+            dirs.contains_key("packages/api/"),
+            "the touched child must be distinguishable: {dirs:?}"
+        );
+        assert!(
+            !dirs.contains_key("packages/web/"),
+            "an untouched sibling must NOT appear, or it cannot ever read as stale: {dirs:?}"
+        );
     }
 }
