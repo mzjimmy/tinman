@@ -92,3 +92,15 @@ describe('gaps (R4-C3): scan facts translated into 人话缺口, never into a pe
     expect(detectGaps(facts).map((g) => g.id)).toEqual(detectGaps(facts).map((g) => g.id))
   })
 })
+
+describe('gaps (R4 round 2): the sentence must match the evidence behind it', () => {
+  it('does not call a registration page a login page', () => {
+    const gaps = detectGaps(
+      makeFacts({ pages: ['src/pages/Register.tsx'], api_endpoints: ['GET /health'] }),
+    )
+    const hit = gaps.find((g) => g.kind === 'missing_counterpart')
+    expect(hit).toBeDefined()
+    expect(hit!.evidence.join(' ')).toContain('src/pages/Register.tsx')
+    expect(hit!.text).not.toContain('登录页')
+  })
+})

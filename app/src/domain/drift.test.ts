@@ -124,3 +124,75 @@ describe('drift (R4-C4): the map is re-checked against the repo, never silently 
     expect(after.mapConfirmed).toBe(false)
   })
 })
+
+describe('drift (R4 round 2): findings are readable, and they are actually stored', () => {
+  function twoWireProject(): Project {
+    return makeProject({
+      id: 'p-noise',
+      mapConfirmed: true,
+      parts: [
+        makePart({
+          id: 'part-torso',
+          slot: 'torso',
+          label: '核心',
+          weight: 3,
+          status: 'in_progress',
+          wires: [
+            makeWire({ id: 'w-a', label: '核心域 A', met: 1, total: 4 }),
+            makeWire({ id: 'w-b', label: '核心域 B', met: 0, total: 4 }),
+          ],
+          facts: { files: ['src/'], tests: '—', lastCommit: '—', todoCount: 0 },
+        }),
+      ],
+    })
+  }
+
+  it('raises a stale wire at most once, however many of its files are hot', () => {
+    // A non-expert reading four identical sentences learns nothing the first one
+    // did not already say.
+    const prev = makeFacts()
+    const next = makeFacts({
+      git: {
+        branch: 'main',
+        last_commit_at: '2026-09-10T00:00:00Z',
+        last_commit_subject: 'rework core',
+        uncommitted: false,
+        top_files_30d: [
+          { path: 'src/core/engine.ts', commits: 31 },
+          { path: 'src/core/rules.ts', commits: 22 },
+          { path: 'src/core/io.ts', commits: 12 },
+        ],
+      },
+    })
+    const stale = detectDrift(twoWireProject(), prev, next).filter((f) => f.kind === 'wire_stale')
+    expect(stale.map((f) => f.wireId).sort()).toEqual(['w-a', 'w-b'])
+  })
+
+  it('applyDrift actually stores the findings where a reader can reach them', () => {
+    // The two invariants below prove applyDrift does no harm; without this, a
+    // function that returned the project untouched would satisfy the whole suite.
+    const prev = makeFacts({ tree: [{ name: 'src', kind: 'dir', files: 10 }] })
+    const next = makeFacts({
+      tree: [
+        { name: 'src', kind: 'dir', files: 10 },
+        { name: 'billing', kind: 'dir', files: 22 },
+      ],
+    })
+    const findings = detectDrift(mappedProject(), prev, next)
+    expect(findings.length).toBeGreaterThan(0)
+    const after = applyDrift(mappedProject(), findings)
+    expect(after.driftFindings).toEqual(findings)
+  })
+
+  it('stored findings survive the round trip through workspace prefs', () => {
+    const prev = makeFacts({ tree: [{ name: 'src', kind: 'dir', files: 10 }] })
+    const next = makeFacts({
+      tree: [
+        { name: 'src', kind: 'dir', files: 10 },
+        { name: 'billing', kind: 'dir', files: 22 },
+      ],
+    })
+    const after = applyDrift(mappedProject(), detectDrift(mappedProject(), prev, next))
+    expect(JSON.parse(JSON.stringify(after)).driftFindings).toEqual(after.driftFindings)
+  })
+})

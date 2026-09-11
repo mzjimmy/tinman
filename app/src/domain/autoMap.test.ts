@@ -13,10 +13,19 @@ describe('autoMap (R4-C1): the draft the user only has to accept', () => {
     expect(slotForModule('domain/', facts)).toBe('torso')
   })
 
-  it('never invents an eighth slot and never guesses wildly', () => {
+  it('abstains outright on a directory it cannot place, rather than guessing', () => {
+    // R4 round 2: the original form of this test ("null OR a legal slot") was
+    // satisfied by a function that always returned 'torso'. Abstention is the
+    // actual requirement, so assert it.
+    expect(slotForModule('zzz-unknowable/', makeFacts())).toBeNull()
+  })
+
+  it('places the conventional container directories rather than leaving them unmapped', () => {
+    // 'src' is the single most common top-level directory in real repos. Leaving
+    // it unmapped hands the novice user the exact chore this round removes.
     const facts = makeFacts()
-    const odd = slotForModule('zzz-unknowable/', facts)
-    expect(odd === null || ALL_SLOTS.includes(odd)).toBe(true)
+    expect(slotForModule('src/', facts)).not.toBeNull()
+    expect(slotForModule('app/', facts)).not.toBeNull()
   })
 
   it('produces a complete seven-slot proposal with zero human typing', () => {
@@ -233,5 +242,20 @@ describe('autoDraft (R4-C1): the import path never leaves the user an empty shee
       ],
     })
     expect(proposal.parts.map((p) => p.slot).sort()).toEqual([...ALL_SLOTS].sort())
+  })
+})
+
+describe('autoDraft (R4 round 2): the credited author must be the actual author', () => {
+  it('does not credit the model when it returned no usable part at all', () => {
+    const { source } = autoDraft(makeFacts(), { parts: [] })
+    expect(source).toBe('heuristic')
+  })
+
+  it('does not credit the model when every part it proposed was dropped', () => {
+    const { proposal, source } = autoDraft(makeFacts(), {
+      parts: [{ slot: 'tail', present: true, label: 'x', weight: 2, modulePaths: [], wires: [] }],
+    })
+    expect(source).toBe('heuristic')
+    expect(proposal.parts).toHaveLength(7)
   })
 })
