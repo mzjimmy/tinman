@@ -723,6 +723,7 @@ pub fn validate(purpose: Purpose, raw: &str, facts: &Value) -> Result<Validated,
     }
     match purpose {
         Purpose::AdvisePart => validate_advise_part(&value, facts),
+        Purpose::MapArchitecture => validate_map_architecture(value),
         _ => {
             if let Some(diag) = value.get("diagnosis").and_then(|d| d.as_str()) {
                 check_diagnosis_sourced(diag, facts)?;
@@ -730,6 +731,74 @@ pub fn validate(purpose: Purpose, raw: &str, facts: &Value) -> Result<Validated,
             Ok(Validated::Other(value))
         }
     }
+}
+
+const MAP_SLOTS: &[&str] = &[
+    "head",
+    "torso",
+    "left_arm",
+    "right_arm",
+    "left_leg",
+    "right_leg",
+    "backpack",
+];
+
+fn missing_field(field: &str) -> Rejection {
+    Rejection {
+        reason: RejectionReason::MissingField,
+        detail: rejection_detail(RejectionReason::MissingField, Some(field)),
+    }
+}
+
+/// Shape-check `map_architecture` output and force every criterion unmet.
+/// `wires` is optional (an existing test accepts a parts-only object); when
+/// present, each wire must have 3–6 criteria.
+fn validate_map_architecture(value: Value) -> Result<Validated, Rejection> {
+    let parts = value
+        .get("parts")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| missing_field("parts"))?;
+
+    for part in parts {
+        let slot = part.get("slot").and_then(|s| s.as_str()).unwrap_or("");
+        if slot.is_empty() || !MAP_SLOTS.contains(&slot) {
+            return Err(missing_field("slot"));
+        }
+        if let Some(wires_val) = part.get("wires") {
+            let wires = wires_val
+                .as_array()
+                .ok_or_else(|| missing_field("wires"))?;
+            for wire in wires {
+                let criteria = wire
+                    .get("criteria")
+                    .and_then(|c| c.as_array())
+                    .ok_or_else(|| missing_field("criteria"))?;
+                if criteria.len() < 3 || criteria.len() > 6 {
+                    return Err(missing_field("criteria"));
+                }
+            }
+        }
+    }
+
+    let mut out = value;
+    if let Some(out_parts) = out.get_mut("parts").and_then(|v| v.as_array_mut()) {
+        for part in out_parts {
+            let Some(wires) = part.get_mut("wires").and_then(|v| v.as_array_mut()) else {
+                continue;
+            };
+            for wire in wires {
+                let Some(criteria) = wire.get_mut("criteria").and_then(|v| v.as_array_mut()) else {
+                    continue;
+                };
+                for c in criteria {
+                    if let Some(obj) = c.as_object_mut() {
+                        obj.insert("met".into(), Value::Bool(false));
+                    }
+                }
+            }
+        }
+    }
+    Ok(Validated::Other(out))
 }
 
 fn validate_advise_part(value: &Value, facts: &Value) -> Result<Validated, Rejection> {
@@ -1319,7 +1388,7 @@ mod tests {
     }
 
     #[test]
-    fn other_purposes_exist_and_skip_five_field_shape() {
+    fn other_purposes_skip_the_five_field_advice_shape() {
         let raw = json!({"parts": [{"slot": "torso", "label": "core"}]}).to_string();
         let got = validate(Purpose::MapArchitecture, &raw, &facts()).unwrap();
         match got {
