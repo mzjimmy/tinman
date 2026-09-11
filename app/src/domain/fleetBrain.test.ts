@@ -11,7 +11,12 @@
  */
 import { describe, expect, it } from 'vitest'
 import { makeFacts, makePart, makeProject, makeWire } from './fixtures'
-import { applyFleetBlocking, detectFleetLinks, fleetBrief } from './fleetBrain'
+import {
+  applyFleetBlocking,
+  detectFleetLinks,
+  fleetBrief,
+  fleetRankingWithBlocking,
+} from './fleetBrain'
 import { fleetRanking } from './shortLeg'
 import type { Facts } from '../lib/api'
 import type { Project } from './types'
@@ -171,5 +176,81 @@ describe('fleetBrief (R9-C2): one paragraph for the whole fleet', () => {
 
   it('says so plainly when the fleet is empty', () => {
     expect(fleetBrief([], []).trim()).not.toBe('')
+  })
+})
+
+describe('fleetRankingWithBlocking (R9 round 2): the lift must survive the Top-5 slice', () => {
+  // applyFleetBlocking cannot invent entries. If the blocking provider part is
+  // 6th on local score it is sliced away BEFORE the lift, so the fleet brain
+  // silently fails exactly when the fleet is big enough to need it. Ranking must
+  // therefore happen unlimited, then blocking, then the slice — and that order
+  // has to be structural, not a convention the caller is trusted to remember.
+  function crowd(): Project[] {
+    const noise = Array.from({ length: 6 }, (_, i) =>
+      makeProject({
+        id: `p-noise-${i}`,
+        name: `noise-${i}`,
+        root: `/repos/noise-${i}`,
+        mapConfirmed: true,
+        parts: [
+          makePart({
+            id: `noise-${i}`,
+            slot: 'torso',
+            label: '核心',
+            weight: 8,
+            status: 'in_progress',
+            wires: [makeWire({ id: `w-noise-${i}`, met: 0, total: 5 })],
+          }),
+        ],
+      }),
+    )
+    return [provider(), consumer(), ...noise]
+  }
+
+  it('lifts a blocker that local score would have left outside the top 5', () => {
+    const projects = crowd()
+    const factsById = { 'p-web': factsDependingOnCoreApi() }
+    // Sanity: on local score alone the provider is nowhere near the top 5.
+    expect(fleetRanking(projects, 5).some((e) => e.partId === 'core-ra')).toBe(false)
+
+    const top = fleetRankingWithBlocking(projects, factsById, 5)
+    expect(top).toHaveLength(5)
+    expect(top[0]!.partId).toBe('core-ra')
+  })
+
+  it('still returns the plain ranking when nothing blocks anything', () => {
+    const projects = crowd()
+    const top = fleetRankingWithBlocking(projects, {}, 5)
+    expect(top.map((e) => e.partId)).toEqual(fleetRanking(projects, 5).map((e) => e.partId))
+  })
+})
+
+describe('detectFleetLinks (R9 round 2): say how sure the link is', () => {
+  it('marks a bare registry-name match as the weaker kind of evidence', () => {
+    const links = detectFleetLinks([provider(), consumer()], {
+      'p-web': factsDependingOnCoreApi(),
+    })
+    expect(links[0]!.confidence).toBe('name')
+  })
+
+  it('marks a local-protocol dependency as the strong kind', () => {
+    const local = makeFacts({
+      dependencies: [
+        {
+          path: 'package.json',
+          kind: 'package.json',
+          data: { dependencies: { 'core-api': 'workspace:*' } },
+        },
+      ],
+    })
+    const links = detectFleetLinks([provider(), consumer()], { 'p-web': local })
+    expect(links[0]!.confidence).toBe('local')
+  })
+
+  it('a name-only link says out loud that it is only a name match', () => {
+    const links = detectFleetLinks([provider(), consumer()], {
+      'p-web': factsDependingOnCoreApi(),
+    })
+    expect(links[0]!.reason).toContain('同名')
   })
 })
