@@ -1329,4 +1329,101 @@ mod tests {
         let _ = validate(Purpose::DraftGoal, &raw, &facts()).unwrap();
         let _ = validate(Purpose::VerifyDelivery, &raw, &facts()).unwrap();
     }
+
+    // ---- round 4 (R4-C2): map_architecture output gets a real shape check ----
+
+    fn map_raw(parts: Value) -> String {
+        json!({ "parts": parts }).to_string()
+    }
+
+    fn good_wire() -> Value {
+        json!({
+            "label": "\u{767b}\u{5f55}",
+            "criteria": [
+                {"text": "a"}, {"text": "b"}, {"text": "c"}
+            ]
+        })
+    }
+
+    #[test]
+    fn r4_map_architecture_accepts_a_well_shaped_proposal() {
+        let raw = map_raw(json!([{
+            "slot": "right_arm",
+            "present": true,
+            "label": "api",
+            "weight": 2,
+            "modulePaths": ["api/"],
+            "wires": [good_wire()]
+        }]));
+        let got = validate(Purpose::MapArchitecture, &raw, &facts()).unwrap();
+        match got {
+            Validated::Other(v) => assert!(v.get("parts").unwrap().is_array()),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn r4_map_architecture_rejects_output_without_parts() {
+        let raw = json!({"modules": []}).to_string();
+        let err = validate(Purpose::MapArchitecture, &raw, &facts()).unwrap_err();
+        assert_eq!(err.reason, RejectionReason::MissingField);
+    }
+
+    #[test]
+    fn r4_map_architecture_rejects_an_eighth_slot() {
+        let raw = map_raw(json!([{"slot": "tail", "label": "x", "wires": []}]));
+        let err = validate(Purpose::MapArchitecture, &raw, &facts()).unwrap_err();
+        assert_eq!(err.reason, RejectionReason::MissingField);
+    }
+
+    #[test]
+    fn r4_map_architecture_rejects_a_wire_outside_three_to_six_criteria() {
+        let raw = map_raw(json!([{
+            "slot": "torso",
+            "label": "core",
+            "wires": [{"label": "w", "criteria": [{"text": "a"}, {"text": "b"}]}]
+        }]));
+        let err = validate(Purpose::MapArchitecture, &raw, &facts()).unwrap_err();
+        assert_eq!(err.reason, RejectionReason::MissingField);
+    }
+
+    #[test]
+    fn r4_map_architecture_still_refuses_a_progress_number() {
+        let raw = map_raw(json!([{
+            "slot": "torso",
+            "label": "core 60%",
+            "wires": [good_wire()]
+        }]));
+        let err = validate(Purpose::MapArchitecture, &raw, &facts()).unwrap_err();
+        assert_eq!(err.reason, RejectionReason::ContainsProgressNumber);
+    }
+
+    #[test]
+    fn r4_map_architecture_never_marks_a_criterion_met() {
+        let raw = map_raw(json!([{
+            "slot": "torso",
+            "label": "core",
+            "wires": [{
+                "label": "w",
+                "criteria": [
+                    {"text": "a", "met": true},
+                    {"text": "b", "met": true},
+                    {"text": "c", "met": true}
+                ]
+            }]
+        }]));
+        let got = validate(Purpose::MapArchitecture, &raw, &facts()).unwrap();
+        let Validated::Other(v) = got else { panic!("expected Other") };
+        for part in v.get("parts").unwrap().as_array().unwrap() {
+            for wire in part.get("wires").unwrap().as_array().unwrap() {
+                for c in wire.get("criteria").unwrap().as_array().unwrap() {
+                    assert_eq!(
+                        c.get("met").and_then(|m| m.as_bool()),
+                        Some(false),
+                        "the model may not pre-satisfy a criterion"
+                    );
+                }
+            }
+        }
+    }
 }
