@@ -422,3 +422,133 @@ describe('R5-C: a resident patrol actually runs', () => {
     expect(metAfter).toEqual(metBefore)
   })
 })
+
+describe('R6: 驻守重扫刷新短腿 — a patrol pass actually moves the ranking', () => {
+  const confirmedWs = {
+    id: 'ws-r5',
+    name: 'demo',
+    root_path: '/tmp/demo',
+    created_at: 'x',
+    llm_profile_id: null,
+    prefs: { mapConfirmed: true, modulesBySlot: { torso: ['src/'], left_leg: ['infra/'] } },
+  }
+
+  function confirmedWorkspace(): WorkspaceDto {
+    return {
+      ...WS,
+      prefs: { mapConfirmed: true, modulesBySlot: { torso: ['src/'], left_leg: ['infra/'] } },
+      parts: [
+        {
+          id: 'part-torso', workspace_id: 'ws-r5', slot: 'torso', label: '核心', weight: 2,
+          planned_start: null, status: 'in_progress',
+          wires: [{
+            id: 'w-torso', part_id: 'part-torso', label: '核心流程',
+            criteria: [
+              { text: 'a', met: true, evidence: 'e' },
+              { text: 'b', met: false, evidence: '' },
+            ],
+            progress: 50, status: 'in_progress', updated_at: '2026-09-10T00:00:00Z',
+          }],
+        },
+        {
+          id: 'part-leg', workspace_id: 'ws-r5', slot: 'left_leg', label: '基础设施', weight: 2,
+          planned_start: null, status: 'in_progress',
+          wires: [{
+            id: 'w-leg', part_id: 'part-leg', label: 'CI',
+            criteria: [
+              { text: 'a', met: true, evidence: 'e' },
+              { text: 'b', met: false, evidence: '' },
+            ],
+            progress: 50, status: 'in_progress', updated_at: '2026-09-10T00:00:00Z',
+          }],
+        },
+      ],
+    }
+  }
+
+  // Both parts start identical: same weight, same 1-of-2 criteria met. The only
+  // thing that can separate them is a fact about which code has been touched.
+  function factsWhereOnlyTorsoIsBusy(): Facts {
+    return facts({
+      tree: [
+        { name: 'src', kind: 'dir', files: 9 },
+        { name: 'infra', kind: 'dir', files: 4 },
+      ],
+      git: {
+        branch: 'main',
+        last_commit_at: new Date().toISOString(),
+        last_commit_subject: 'busy on core',
+        uncommitted: false,
+        top_files_30d: [{ path: 'src/core/a.ts', commits: 12 }],
+      },
+    })
+  }
+
+  it('a rescan reorders the short leg without changing a single criterion', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.mocked(api.listWorkspaces).mockResolvedValue([confirmedWs])
+    vi.mocked(api.getWorkspace).mockResolvedValue(confirmedWorkspace())
+    // First facts: nothing known about what is busy, so neither part is stalled.
+    vi.mocked(api.getFacts).mockResolvedValue(
+      facts({
+        git: {
+          branch: 'main',
+          last_commit_at: new Date().toISOString(),
+          last_commit_subject: 'init',
+          uncommitted: false,
+          top_files_30d: [
+            { path: 'src/core/a.ts', commits: 12 },
+            { path: 'infra/ci.yml', commits: 7 },
+          ],
+        },
+      }),
+    )
+    vi.mocked(api.scanWorkspace).mockResolvedValue(factsWhereOnlyTorsoIsBusy())
+
+    const capture = { current: null as AppStore | null }
+    render(<Harness capture={capture} />)
+    await waitFor(() => expect(capture.current?.ready).toBe(true))
+    await waitFor(() => expect(capture.current!.projects[0]?.parts.length).toBe(2))
+
+    const metBefore = capture.current!.projects.flatMap((p) =>
+      p.parts.flatMap((pt) => pt.wires.flatMap((w) => w.criteria.map((c) => c.met))),
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
+    })
+
+    // infra/ dropped out of the 30-day window, so the left leg is now the stale
+    // one and must outrank the torso that is being actively worked on.
+    await waitFor(() => {
+      const top = capture.current!.ranking[0]
+      expect(top?.partId).toBe('part-leg')
+    })
+
+    const metAfter = capture.current!.projects.flatMap((p) =>
+      p.parts.flatMap((pt) => pt.wires.flatMap((w) => w.criteria.map((c) => c.met))),
+    )
+    expect(metAfter).toEqual(metBefore)
+  })
+
+  it('INVARIANT: the rescan that moved the ranking moved no fill height', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.mocked(api.listWorkspaces).mockResolvedValue([confirmedWs])
+    vi.mocked(api.getWorkspace).mockResolvedValue(confirmedWorkspace())
+    vi.mocked(api.getFacts).mockResolvedValue(facts())
+    vi.mocked(api.scanWorkspace).mockResolvedValue(factsWhereOnlyTorsoIsBusy())
+
+    const capture = { current: null as AppStore | null }
+    render(<Harness capture={capture} />)
+    await waitFor(() => expect(capture.current?.ready).toBe(true))
+    await waitFor(() => expect(capture.current!.projects[0]?.parts.length).toBe(2))
+
+    const progressBefore = capture.current!.derived!.parts.map((d) => d.progress)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
+    })
+
+    expect(capture.current!.derived!.parts.map((d) => d.progress)).toEqual(progressBefore)
+  })
+})
