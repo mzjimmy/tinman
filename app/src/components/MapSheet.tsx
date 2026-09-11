@@ -14,8 +14,13 @@ interface MapSheetProps {
   facts?: Facts
   modules: string[]
   defaultName: string
+  gaps?: string[]
+  source?: 'llm' | 'heuristic' | 'idle'
+  drafting?: boolean
+  preserveProgress?: boolean
   onConfirm: (proposal: ArchitectureProposal, name: string) => void
   onDraft?: (proposal: ArchitectureProposal) => void
+  onDirty?: () => void
   onCancel: () => void
 }
 
@@ -24,8 +29,13 @@ export function MapSheet({
   facts,
   modules,
   defaultName,
+  gaps = [],
+  source = 'idle',
+  drafting = false,
+  preserveProgress = false,
   onConfirm,
   onDraft,
+  onDirty,
   onCancel,
 }: MapSheetProps) {
   const initial = useMemo(
@@ -45,13 +55,19 @@ export function MapSheet({
     for (const m of p.modulePaths) assigned.set(m, p.slot)
   }
 
+  function markDirty() {
+    onDirty?.()
+  }
+
   function setPart(slot: Slot, patch: Partial<ArchitectureProposal['parts'][number]>) {
+    markDirty()
     setDraft((d) => ({
       parts: d.parts.map((p) => (p.slot === slot ? { ...p, ...patch } : p)),
     }))
   }
 
   function addWire(slot: Slot) {
+    markDirty()
     setDraft((d) => ({
       parts: d.parts.map((p) =>
         p.slot === slot
@@ -65,6 +81,7 @@ export function MapSheet({
   }
 
   function updateWire(slot: Slot, wi: number, label: string) {
+    markDirty()
     setDraft((d) => ({
       parts: d.parts.map((p) =>
         p.slot === slot
@@ -75,6 +92,7 @@ export function MapSheet({
   }
 
   function updateCriterion(slot: Slot, wi: number, ci: number, text: string) {
+    markDirty()
     setDraft((d) => ({
       parts: d.parts.map((p) =>
         p.slot === slot
@@ -95,6 +113,7 @@ export function MapSheet({
   }
 
   function addCriterion(slot: Slot, wi: number) {
+    markDirty()
     setDraft((d) => ({
       parts: d.parts.map((p) =>
         p.slot === slot
@@ -134,7 +153,9 @@ export function MapSheet({
               ...w,
               criteria: w.criteria
                 .filter((c) => c.text.trim())
-                .map((c) => ({ ...c, met: false })),
+                .map((c) =>
+                  preserveProgress ? { ...c, text: c.text.trim() } : { ...c, text: c.text.trim(), met: false, evidence: '' },
+                ),
             }))
           : [],
       })),
@@ -147,13 +168,35 @@ export function MapSheet({
       <header className="map-sheet-head">
         <div>
           <h2>架构地图</h2>
-          <p>七个固定槽位。多出来的模块合并进同类槽，不能加第八个。未使用的槽保持暗色轮廓，不是 0%。</p>
+          <p className="map-sheet-lead">
+            这是根据仓库自动起草的部位图。你只需要看像不像这个项目，确认即可。不懂代码也可以先确认，之后随时改。
+          </p>
+          <p className="map-source">
+            {drafting
+              ? '正在请模型润色这份草稿…'
+              : source === 'llm'
+                ? '来源：模型根据扫描事实起草'
+                : source === 'heuristic'
+                  ? '来源：根据扫描到的目录起草（未用模型，或模型不可用）'
+                  : '七个固定槽位。多出来的模块合并进同类槽。未使用的槽保持暗色，不是 0%。'}
+          </p>
         </div>
         <label>
           项目名
           <input value={name} onChange={(e) => setName(e.target.value)} />
         </label>
       </header>
+
+      {gaps.length > 0 && (
+        <section className="map-gaps" aria-label="current gaps">
+          <h3>现在能看出来的缺口</h3>
+          <ul>
+            {gaps.map((g) => (
+              <li key={g}>{g}</li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {facts && (
         <div className="facts-summary">
@@ -183,6 +226,7 @@ export function MapSheet({
                 value={assigned.get(m) ?? ''}
                 onChange={(e) => {
                   const v = e.target.value as Slot | ''
+                  markDirty()
                   setDraft((d) => assignModule(d, m, v ? (v as Slot) : null))
                 }}
                 aria-label={`assign ${m}`}
@@ -287,7 +331,7 @@ export function MapSheet({
           </button>
         )}
         <button type="button" className="btn primary" onClick={submit}>
-          确认架构地图
+          {source === 'idle' ? '确认架构地图' : '确认这份草稿'}
         </button>
       </footer>
     </div>

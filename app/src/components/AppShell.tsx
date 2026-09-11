@@ -141,12 +141,12 @@ function TopBar({ store }: { store: AppStore }) {
           <button type="button" className="btn-sm" onClick={() => store.openStub('More')}>
             ⋯
           </button>
-          {store.selectedProject && !store.selectedProject.mapConfirmed && (
+          {store.selectedProject && (
             <button type="button" className="btn-sm" onClick={() => store.setMapOpen(true)}>
               架构地图
             </button>
           )}
-          {store.selectedProject?.mapConfirmed && (
+          {store.selectedProject && (
             <button type="button" className="btn-sm" onClick={() => void store.rescan()}>
               增量扫描
             </button>
@@ -306,6 +306,22 @@ export function AppShell({ store }: { store: AppStore }) {
           {store.error}
           <button type="button" className="btn-sm" onClick={store.clearError}>
             关闭
+          </button>
+        </div>
+      )}
+      {store.mapDrift && store.selectedProject?.mapConfirmed && (
+        <div className="drift-banner" role="status">
+          <span>
+            仓库结构有变化
+            {store.mapDriftAdded?.length ? `：新增 ${store.mapDriftAdded.join('、')}` : ''}
+            {store.mapDriftRemoved?.length ? `；不见了 ${store.mapDriftRemoved.join('、')}` : ''}
+            。部位图可能过时，进度不会被自动改写。
+          </span>
+          <button type="button" className="btn-sm primary" onClick={() => store.openMapDrift?.()}>
+            查看更新草稿
+          </button>
+          <button type="button" className="btn-sm" onClick={() => store.dismissMapDrift?.()}>
+            稍后
           </button>
         </div>
       )}

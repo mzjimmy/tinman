@@ -72,6 +72,11 @@ export interface Project {
   recentTasks: { label: string; ago: string }[]
   lastActivityAt?: string
   mapDraft?: import('./proposal').ArchitectureProposal
+  mapDraftSource?: 'llm' | 'heuristic'
+  mapGaps?: string[]
+  mapDrift?: import('./proposal').ArchitectureProposal
+  mapDriftAdded?: string[]
+  mapDriftRemoved?: string[]
   llmProfileId?: string | null
 }
 

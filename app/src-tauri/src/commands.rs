@@ -92,6 +92,10 @@ pub async fn scan_workspace(
             if let Some(branch) = &facts.git.branch {
                 obj.insert("gitBranch".into(), Value::String(branch.clone()));
             }
+            obj.insert(
+                "treeFingerprint".into(),
+                Value::String(crate::scanner::tree_fingerprint(&facts)),
+            );
         }
         let _ = db::merge_workspace_prefs(&db, &id, &patch);
     }

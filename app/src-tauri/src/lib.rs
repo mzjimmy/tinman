@@ -9,6 +9,7 @@ mod queue;
 mod runner;
 mod scanner;
 mod verify;
+mod watch;
 mod worktree;
 
 use std::sync::{Arc, Mutex};
@@ -33,6 +34,11 @@ pub fn run() {
                 children: Arc::new(crate::runner::LiveChildren::default()),
             });
             commands::recover_and_drain(app.handle());
+            let handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("tinman-watch".into())
+                .spawn(move || crate::watch::run_loop(handle))
+                .ok();
 
             let add = MenuItemBuilder::with_id("add-folder", "Add Local Folder…")
                 .accelerator("CmdOrCtrl+O")
