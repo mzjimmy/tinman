@@ -100,3 +100,63 @@ describe('partStalenessDays (R6): staleness is per part, not per repo', () => {
     expect(partStalenessDays(facts, ['src/'], NOW)).toBe(1)
   })
 })
+
+describe('partStalenessDays (R7): the top-10 file cap must not make this inert', () => {
+  // scanner.rs truncates top_files_30d to 10. ANY active repo saturates that, so
+  // round 6's honest abstention silently degraded per-part staleness back to
+  // repo-wide recency for exactly the users it was built for. dirs_30d is the
+  // uncapped per-directory aggregate that fixes it.
+  const tenHotFiles = Array.from({ length: 10 }, (_, i) => ({
+    path: `hot/f${i}.ts`,
+    commits: 20 - i,
+  }))
+
+  function saturated(dirs?: { dir: string; commits: number }[]): ReturnType<typeof makeFacts> {
+    return makeFacts({
+      git: {
+        branch: 'main',
+        last_commit_at: '2026-09-10T00:00:00Z',
+        last_commit_subject: 'busy',
+        uncommitted: false,
+        top_files_30d: tenHotFiles,
+        ...(dirs ? { dirs_30d: dirs } : {}),
+      } as ReturnType<typeof makeFacts>['git'],
+    })
+  }
+
+  it('still calls an untouched module stale even when the file list is saturated', () => {
+    const facts = saturated([{ dir: 'hot/', commits: 120 }])
+    expect(partStalenessDays(facts, ['infra/'], NOW)).toBeGreaterThan(30)
+  })
+
+  it('does not call a module stale when the directory aggregate shows activity', () => {
+    const facts = saturated([
+      { dir: 'hot/', commits: 120 },
+      { dir: 'infra/', commits: 2 },
+    ])
+    expect(partStalenessDays(facts, ['infra/'], NOW)).toBe(1)
+  })
+
+  it('keeps the cautious fallback when the aggregate is missing (older cached facts)', () => {
+    // No dirs_30d at all: we cannot tell, so we must not invent a short leg.
+    expect(partStalenessDays(saturated(), ['infra/'], NOW)).toBe(1)
+  })
+
+  it('trusts the aggregate over an unsaturated file list too', () => {
+    const facts = makeFacts({
+      git: {
+        branch: 'main',
+        last_commit_at: '2026-09-10T00:00:00Z',
+        last_commit_subject: 'x',
+        uncommitted: false,
+        top_files_30d: [{ path: 'hot/a.ts', commits: 3 }],
+        dirs_30d: [
+          { dir: 'hot/', commits: 3 },
+          { dir: 'infra/', commits: 1 },
+        ],
+      } as ReturnType<typeof makeFacts>['git'],
+    })
+    expect(partStalenessDays(facts, ['infra/'], NOW)).toBe(1)
+    expect(partStalenessDays(facts, ['legacy/'], NOW)).toBeGreaterThan(30)
+  })
+})

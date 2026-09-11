@@ -903,4 +903,68 @@ mod tests {
         let err = scan_and_write(&project, &project.join("nested"), |_| {}).unwrap_err();
         assert!(err.to_string().contains("refusing"));
     }
+
+    // ---- round 7 (R7): per-directory commit activity survives the top-10 cap ----
+
+    fn git_cmd(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A repo busier than the 10-file cap, spread over two top-level directories.
+    fn busy_repo(tmp: &std::path::Path) {
+        git_cmd(tmp, &["init", "-q"]);
+        git_cmd(tmp, &["config", "user.email", "t@example.com"]);
+        git_cmd(tmp, &["config", "user.name", "t"]);
+        std::fs::create_dir_all(tmp.join("hot")).unwrap();
+        std::fs::create_dir_all(tmp.join("quiet")).unwrap();
+        // 12 separate commits in hot/ — more than the cap on its own.
+        for i in 0..12 {
+            let f = tmp.join("hot").join(format!("f{i}.ts"));
+            std::fs::write(&f, format!("// {i}")).unwrap();
+            git_cmd(tmp, &["add", "-A"]);
+            git_cmd(tmp, &["commit", "-q", "-m", &format!("hot {i}")]);
+        }
+        // One commit in quiet/ — real activity that the cap would hide.
+        std::fs::write(tmp.join("quiet").join("q.ts"), "// q").unwrap();
+        git_cmd(tmp, &["add", "-A"]);
+        git_cmd(tmp, &["commit", "-q", "-m", "quiet 1"]);
+    }
+
+    #[test]
+    fn r7_top_files_is_capped_but_dirs_30d_is_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        busy_repo(tmp.path());
+        let g = collect_git(tmp.path());
+
+        // The cap is real and this test would be pointless without it.
+        assert_eq!(g.top_files_30d.len(), 10, "top_files_30d is truncated to 10");
+
+        let dirs: std::collections::BTreeMap<&str, u64> =
+            g.dirs_30d.iter().map(|d| (d.dir.as_str(), d.commits)).collect();
+        assert!(dirs.contains_key("hot/"), "busy dir present: {dirs:?}");
+        assert!(
+            dirs.contains_key("quiet/"),
+            "a directory with real activity must survive the file cap: {dirs:?}"
+        );
+        assert_eq!(dirs.get("quiet/"), Some(&1));
+        assert_eq!(dirs.get("hot/"), Some(&12));
+    }
+
+    #[test]
+    fn r7_dirs_30d_is_empty_for_a_non_git_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "x").unwrap();
+        let g = collect_git(tmp.path());
+        assert!(g.dirs_30d.is_empty());
+    }
 }
