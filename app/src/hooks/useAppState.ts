@@ -29,6 +29,7 @@ import {
   resumeTask as applyResume,
 } from '../domain/queue'
 import { deriveProject, fleetRanking, highestScoreSlot } from '../domain/shortLeg'
+import { applyStalenessToProject } from '../domain/staleness'
 import type { ArchitectureProposal } from '../domain/proposal'
 import type {
   GoalCard,
@@ -310,10 +311,15 @@ export function useAppState() {
       })
       if (row.state === 'done' || row.state === 'checking') {
         void api.getWorkspace(row.workspace_id).then((ws) => {
-          const project = projectFromWorkspace(ws)
+          const facts = patrolLive.current.factsById[row.workspace_id]
+          const project = projectFromWorkspace(ws, facts)
           setProjects((prev) => {
             const others = prev.filter((p) => p.id !== project.id)
-            return [...others, project]
+            const existing = prev.find((p) => p.id === project.id)
+            const next = existing?.driftFindings
+              ? { ...project, driftFindings: existing.driftFindings }
+              : project
+            return [...others, next]
           })
         }).catch(() => undefined)
       }
@@ -419,13 +425,18 @@ export function useAppState() {
           const nextFacts = await api.scanWorkspace(id)
           live.factsById = { ...live.factsById, [id]: nextFacts }
           setFactsById((m) => ({ ...m, [id]: nextFacts }))
-          const snapshot = live.projects.find((p) => p.id === id)
-          if (snapshot?.mapConfirmed && prev) {
-            const findings = detectDrift(snapshot, prev, nextFacts)
-            setProjects((ps) =>
-              ps.map((p) => (p.id === id ? applyDrift(p, findings) : p)),
-            )
-          }
+          // Rebuild ranking inputs from the new facts. Criteria stay on the
+          // in-memory parts — scanning must not flip `met` or fill height.
+          setProjects((ps) =>
+            ps.map((p) => {
+              if (p.id !== id) return p
+              const withFacts = applyStalenessToProject(p, nextFacts)
+              if (p.mapConfirmed && prev) {
+                return applyDrift(withFacts, detectDrift(p, prev, nextFacts))
+              }
+              return withFacts
+            }),
+          )
           live.records = {
             ...live.records,
             [id]: recordSuccess(rec, Date.now(), DEFAULT_PATROL_POLICY),

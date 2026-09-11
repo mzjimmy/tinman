@@ -1,3 +1,4 @@
+import { partStalenessDays } from '../domain/staleness'
 import type { Part, PartStatus, Project, Slot, Wire } from '../domain/types'
 import { ALL_SLOTS } from '../domain/types'
 import type { Facts, PartDto, WorkspaceDto, WorkspaceSummary } from './api'
@@ -16,22 +17,15 @@ function asStatus(s: string): PartStatus {
   return 'pending'
 }
 
-export function daysSince(iso?: string | null): number | undefined {
-  if (!iso) return undefined
-  const t = Date.parse(iso)
-  if (Number.isNaN(t)) return undefined
-  return Math.max(0, Math.floor((Date.now() - t) / 86_400_000))
-}
-
-export function partFromDto(p: PartDto, facts?: Facts | null): Part {
-  const modulePaths = modulePathsFor(p.slot, facts)
+export function partFromDto(p: PartDto, facts?: Facts | null, modulePaths: string[] = []): Part {
+  const lastCommitDays = partStalenessDays(facts, modulePaths)
   const wires: Wire[] = p.wires.map((w) => ({
     id: w.id,
     label: w.label,
     criteria: w.criteria,
     status: asStatus(w.status) === 'unmapped' ? 'pending' : (asStatus(w.status) as Wire['status']),
     updatedAt: w.updated_at,
-    lastCommitDays: daysSince(facts?.git.last_commit_at),
+    lastCommitDays,
   }))
   return {
     id: p.id,
@@ -57,20 +51,10 @@ export function partFromDto(p: PartDto, facts?: Facts | null): Part {
   }
 }
 
-function modulePathsFor(slot: string, facts?: Facts | null): string[] {
-  const prefs = (facts as unknown as { modulesBySlot?: Record<string, string[]> } | null) ?? null
-  return prefs?.modulesBySlot?.[slot] ?? []
-}
-
 export function projectFromWorkspace(ws: WorkspaceDto, facts?: Facts | null): Project {
   const mapConfirmed = Boolean(ws.prefs?.mapConfirmed)
   const modulesBySlot = (ws.prefs?.modulesBySlot ?? {}) as Record<string, string[]>
-  const parts = ws.parts.map((p) => {
-    const part = partFromDto(p, facts)
-    const files = modulesBySlot[p.slot]
-    if (files?.length && part.facts) part.facts = { ...part.facts, files }
-    return part
-  })
+  const parts = ws.parts.map((p) => partFromDto(p, facts, modulesBySlot[p.slot] ?? []))
   const recentTasks = (facts?.git.top_files_30d ?? []).slice(0, 3).map((f) => ({
     label: f.path.split('/').pop() ?? f.path,
     ago: facts?.git.last_commit_at ? relativeTime(facts.git.last_commit_at) : `${f.commits}c`,
