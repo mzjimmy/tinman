@@ -329,10 +329,12 @@ export function AppShell({ store }: { store: AppStore }) {
           profiles={store.llmProfiles ?? []}
           stationCount={store.stationCount}
           theme={store.theme}
+          patrolEnabled={store.patrolEnabled}
           onClose={store.closeSettings}
           onSaveProfile={store.saveLlmProfile}
           onSetStationCount={store.setStationCount}
           onToggleTheme={store.toggleTheme}
+          onSetPatrolEnabled={store.setPatrolEnabled}
         />
       )}
     </div>

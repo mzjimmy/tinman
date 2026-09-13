@@ -119,3 +119,39 @@ export function makeState(overrides: Partial<AppState> = {}): AppState {
     ...overrides,
   }
 }
+
+/** Minimal, overridable Facts for round-4 auto-map / gap / drift / patrol tests. */
+export function makeFacts(overrides: Partial<import('../lib/api').Facts> = {}): import('../lib/api').Facts {
+  return {
+    root: '/tmp/proj',
+    scanned_at: '2026-09-11T00:00:00Z',
+    duration_ms: 1200,
+    file_count: 420,
+    by_extension: { ts: 200, tsx: 120, rs: 100 },
+    loc_by_language: { TypeScript: 18000, Rust: 9000 },
+    tree: [
+      { name: 'src', kind: 'dir', files: 200 },
+      { name: 'api', kind: 'dir', files: 40 },
+      { name: 'infra', kind: 'dir', files: 12 },
+      { name: 'README.md', kind: 'file', files: 1 },
+    ],
+    dependencies: [],
+    entry_points: { npm_scripts: {}, makefile_targets: [], dockerfile: false, readme_commands: [] },
+    tests: { files: [], pass: null, fail: null, note: 'not executed' },
+    git: {
+      branch: 'main',
+      last_commit_at: '2026-09-10T00:00:00Z',
+      last_commit_subject: 'wip',
+      uncommitted: false,
+      top_files_30d: [],
+    },
+    markers: [],
+    spec_docs: [],
+    design_files: [],
+    reference_images: [],
+    routes: [],
+    api_endpoints: [],
+    pages: [],
+    ...overrides,
+  }
+}

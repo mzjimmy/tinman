@@ -6,10 +6,12 @@ export interface SettingsPanelProps {
   profiles: LlmProfile[]
   stationCount: number
   theme: string
+  patrolEnabled?: boolean
   onClose: () => void
   onSaveProfile: (profile: LlmProfile, secret?: string) => void
   onSetStationCount: (n: number) => void
   onToggleTheme: () => void
+  onSetPatrolEnabled?: (next: boolean) => void
 }
 
 // Per-kind form defaults. The keys must match the wire values of
@@ -39,10 +41,12 @@ export function SettingsPanel({
   profiles,
   stationCount,
   theme,
+  patrolEnabled = true,
   onClose,
   onSaveProfile,
   onSetStationCount,
   onToggleTheme,
+  onSetPatrolEnabled,
 }: SettingsPanelProps) {
   const [id, setId] = useState('')
   const [kind, setKind] = useState<LlmProfile['kind']>('ollama')
@@ -166,6 +170,19 @@ export function SettingsPanel({
               保存模型
             </button>
           </form>
+        </section>
+        <section>
+          <h4>定期重扫</h4>
+          <label>
+            <input
+              type="checkbox"
+              checked={patrolEnabled}
+              onChange={(e) => onSetPatrolEnabled?.(e.target.checked)}
+              aria-label="定期重扫"
+            />
+            自动重新扫描项目，让短板排名跟仓库现在的样子走
+          </label>
+          <p className="muted">默认开。关掉后重启仍保持关闭。</p>
         </section>
         <section>
           <h4>外观</h4>

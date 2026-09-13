@@ -40,6 +40,7 @@ export function RobotView({ store }: { store: AppStore }) {
         proposal={store.mapDraft}
         facts={store.facts}
         modules={store.modules}
+        gaps={store.gaps}
         defaultName={selectedProject.name}
         onConfirm={(proposal, name) => void store.confirmMap(proposal, name)}
         onDraft={(p) => void store.saveMapDraft(p)}
