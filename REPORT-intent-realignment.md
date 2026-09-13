@@ -125,12 +125,24 @@ tell them apart"。这违反意图 §8.2。**对非技术用户来说，一个�
   main，因此用的是安全删除 `git branch -d`，不是 `-D`。
 - **`app/node_modules` 已恢复为软链**，指向本地磁盘缓存 `~/.cache/tinman-node/node_modules`。
   前端套件从约 10 分钟回到约 1 分钟（测试本体 2.14 秒，其余为 jsdom 环境准备）。
+- **漂移一已修**：`FleetView.tsx` 删掉「分数」列，回到意图 §7.2 的四列
+  （`colSpan` 5 → 4）。零风险，不触碰任何计算逻辑。
+- **漂移二已修**：删除 `domain/fleetBrain.ts` 与 `domain/intent.ts` 及其测试 —— 二者
+  除自身测试外无任何 import（已复核）。domain 层剩 13 个模块。
+- **构建修复**：`useAppState.test.tsx` 的 `criteria: unknown[]` 收窄为真实形状。该错误
+  **先于本次合并存在**（pre-merge 的 `origin/main` 就有），它让 `npm run build` 的 `tsc`
+  步骤失败。修后 `tsc` 0 error，`vite build` 正常产出 `dist/`。
+- **远端 cursor 分支已删除**。经逐文件比对，它不是 round4 的重复，而是同一想法的
+  **另一版实现**（Rust 侧定时重扫 `watch.rs` + `proposeMap.ts`），已被 rounds 4–9 取代；
+  其提交冻结在本地标签 `backup/superseded/cursor-auto-map-draft-watch-9871`。
+- **已推送**：`main` 与 `origin/main` 同步于 `432d63e`。
 - 9 条合并前的分支顶端全部保留在 `backup/pre-merge/*` 标签下，可随时回退。
 
 ### 未做 / 待定
 
-- **产品代码一行未改**（按选择只出报告）。漂移一至三全部仍是现状。
-- **`main` 尚未推送**，领先 `origin/main` 16 个提交。
+- **漂移三未做**：后台巡检（`patrol`）/ 每部位陈旧度（`staleness`）仍会让分数与排序自己
+  变动。修法是「让变动可见」（在排行条上留一行说明），属**新增设计**而非清理，需单独决策。
 - `rig/round4` / `rig/round5` 仍保留为里程碑指针；两者已完全包含于 main，属可删的下一批。
-- `origin/cursor/auto-map-draft-watch-9871` 未处理；它多出的 `watch.rs`（242 行）
-  是否与 `patrol` 重复，需要单独比对后再决定。
+- 远端 `hardening/memory-limits` 分支仍在（内容已并入 main，可删）。
+- 环境备注：本卷不支持 Trash（缺 `.Trashes`），因此任何会触发 `rmSync` 的工具（如
+  `vite build` 的 `emptyDir`）都会失败 —— 先把 `dist/` 移出再构建即可。
