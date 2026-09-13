@@ -48,7 +48,6 @@ export function FleetView({ store }: { store: AppStore }) {
               <th>部位</th>
               <th>进度</th>
               <th>状态</th>
-              <th>分数</th>
             </tr>
           </thead>
           <tbody>
@@ -83,12 +82,11 @@ export function FleetView({ store }: { store: AppStore }) {
                   {STATUS_LABELS[r.status]}
                   {r.lagging ? ' · 落后于其他部位' : ''}
                 </td>
-                <td>{r.score.toFixed(1)}</td>
               </tr>
             ))}
             {store.ranking.length === 0 && (
               <tr>
-                <td colSpan={5} className="muted">
+                <td colSpan={4} className="muted">
                   确认架构地图后才会进入短腿排行
                 </td>
               </tr>
