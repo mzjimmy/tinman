@@ -388,7 +388,13 @@ describe('sendComposer (C1 composer send gate)', () => {
     id: string
     slot: string
     label: string
-    wires: Array<{ id: string; label: string; criteria: unknown[]; progress: number; status: string }>
+    wires: Array<{
+      id: string
+      label: string
+      criteria: Array<{ text: string; met: boolean; evidence: string }>
+      progress: number
+      status: string
+    }>
   }) {
     return {
       id: opts.id,
